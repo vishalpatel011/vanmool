@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Aggregator only: builds every service in one command. Each service keeps
+         its own Spring Boot parent, so it can still be built and deployed on its own. -->
+    <groupId>com.vanmool</groupId>
+    <artifactId>vanmool</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>Vanmool</name>
+    <description>Vanmool monorepo</description>
+
+    <modules>
+        <module>product-service</module>
+    </modules>
+</project>

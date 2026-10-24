@@ -31,7 +31,7 @@ public class ProductDbService implements ProductService{
 
     @Override
     public Product getProductById(long id) throws ProductNotFoundException {
-        Optional<Product> productOptional = productRepository.findById(id);
+        Optional<Product> productOptional = productRepository.findByIdAndDeletedFalse(id);
         if(productOptional.isEmpty()) {
             throw new ProductNotFoundException("Product with id " + id + " not found");
         }
@@ -41,7 +41,7 @@ public class ProductDbService implements ProductService{
 
     @Override
     public List<Product> getAllProducts() {
-        return productRepository.findAll();
+        return productRepository.findAllByDeletedFalse();
     }
 
     @Override
@@ -79,6 +79,14 @@ public class ProductDbService implements ProductService{
                 patchedProduct.getCategory());
 
         return productRepository.save(existingProduct);
+    }
+
+    @Override
+    public void deleteProduct(long id) throws ProductNotFoundException {
+        // Soft delete: the row stays, so anything that refers to this product id keeps working
+        Product product = getProductById(id);
+        product.setDeleted(true);
+        productRepository.save(product);
     }
 
     private Category getCategoryFromDB(String categoryName) {

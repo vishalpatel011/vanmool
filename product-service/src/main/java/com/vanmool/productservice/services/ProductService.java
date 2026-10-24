@@ -14,5 +14,6 @@ public interface ProductService {
     Product createProduct(String name, String description, double price,String imageUrl, String category);
     Product replaceProduct(long id, String name, String description, double price, String imageUrl, String category) throws ProductNotFoundException;
     Product patchProduct(long id, JsonPatch patch) throws ProductNotFoundException, JsonPatchException, JsonProcessingException;
+    void deleteProduct(long id) throws ProductNotFoundException;
 }
 

@@ -7,10 +7,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface ProductRepository extends JpaRepository<Product, Long> {
-    Product save(Product product);
+    // Products are soft deleted, so reads skip rows whose deleted flag is set
+    Optional<Product> findByIdAndDeletedFalse(long id);
 
-    Optional<Product> findById(long id);
-
-    List<Product> findAll();
-
+    List<Product> findAllByDeletedFalse();
 }

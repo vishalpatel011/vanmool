@@ -94,6 +94,16 @@ public class FakeStoreProductService implements ProductService{
         );
     }
 
+    @Override
+    public void deleteProduct(long id) throws ProductNotFoundException {
+        // FakeStore answers with the deleted product, or an empty body when the id does not exist
+        ResponseEntity<FakeStoreResponseDto> responseEntity = restTemplate.exchange("https://fakestoreapi.com/products/" + id,
+                HttpMethod.DELETE, null, FakeStoreResponseDto.class);
+        if(responseEntity.getBody() == null) {
+            throw new ProductNotFoundException("Product not found with id: " + id);
+        }
+    }
+
 
     private FakeStoreRequestDto createDtoFromParam(String name, double price, String description, String imageUrl, String category) {
         FakeStoreRequestDto fakeStoreProductRequestDto = new FakeStoreRequestDto();

@@ -172,6 +172,7 @@ The product service listens on `http://localhost:8080`.
 | POST | `/products` | 201, the created product | |
 | PUT | `/products/{id}` | 200, the replaced product | 404 product not found |
 | PATCH | `/products/{id}` | 200, the patched product | 400 invalid patch, 404 product not found |
+| DELETE | `/products/{id}` | 204, no body | 404 product not found |
 
 Request body for `POST` and `PUT`:
 
@@ -192,6 +193,8 @@ A new category name creates the category; an existing name reuses it. `PUT` repl
 ```json
 [{ "op": "replace", "path": "/price", "value": 550 }]
 ```
+
+`DELETE` is a soft delete: the row stays in the database with its `deleted` flag set, and the product no longer appears in any response. Other services will refer to products by id (an order keeps the ids of the products it contains), so a product row is never physically removed.
 
 Errors are returned as:
 

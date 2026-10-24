@@ -1,6 +1,6 @@
 package com.vanmool.productservice.controllers;
 
-import com.vanmool.productservice.dtos.CreateFakeStoreProductRequestDto;
+import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Product;
@@ -18,7 +18,7 @@ import java.util.List;
 
 @RestController
 public class ProductController {
-    ProductService productService;
+    private final ProductService productService;
 
     public ProductController(@Qualifier("productDbService") ProductService productService) {
         this.productService = productService;
@@ -36,29 +36,29 @@ public class ProductController {
     }
 
     @GetMapping("/products/{id}")
-    public ProductResponseDto getProductbyId(@PathVariable("id") long id) throws ProductNotFoundException {
+    public ProductResponseDto getProductById(@PathVariable("id") long id) throws ProductNotFoundException {
         Product product = productService.getProductById(id);
         return ProductResponseDto.from(product);
     }
 
     @PostMapping("/products")
-    public ResponseEntity<ProductResponseDto> createProduct(@RequestBody CreateFakeStoreProductRequestDto createFakeStoreProductRequestDto) {
-        Product product = productService.createProduct(createFakeStoreProductRequestDto.getName(),
-                                                        createFakeStoreProductRequestDto.getDescription(),
-                                                        createFakeStoreProductRequestDto.getPrice(),
-                                                        createFakeStoreProductRequestDto.getImageUrl(),
-                                                        createFakeStoreProductRequestDto.getCategory());
+    public ResponseEntity<ProductResponseDto> createProduct(@RequestBody ProductRequestDto productRequestDto) {
+        Product product = productService.createProduct(productRequestDto.getName(),
+                                                        productRequestDto.getDescription(),
+                                                        productRequestDto.getPrice(),
+                                                        productRequestDto.getImageUrl(),
+                                                        productRequestDto.getCategory());
         return new ResponseEntity<>(ProductResponseDto.from(product), HttpStatus.CREATED);
     }
 
     @PutMapping("/products/{id}")
-    public ProductResponseDto replaceProduct(@PathVariable("id") long id, @RequestBody CreateFakeStoreProductRequestDto createFakeStoreProductRequestDto) throws ProductNotFoundException {
+    public ProductResponseDto replaceProduct(@PathVariable("id") long id, @RequestBody ProductRequestDto productRequestDto) throws ProductNotFoundException {
         Product product = productService.replaceProduct(
                 id,
-                createFakeStoreProductRequestDto.getName(),
-                createFakeStoreProductRequestDto.getDescription(), createFakeStoreProductRequestDto.getPrice(),
-                createFakeStoreProductRequestDto.getImageUrl(),
-                createFakeStoreProductRequestDto.getCategory());
+                productRequestDto.getName(),
+                productRequestDto.getDescription(), productRequestDto.getPrice(),
+                productRequestDto.getImageUrl(),
+                productRequestDto.getCategory());
         return ProductResponseDto.from(product);
     }
 

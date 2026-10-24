@@ -1,6 +1,5 @@
 package com.vanmool.productservice.services;
 
-import com.vanmool.productservice.dtos.CreateFakeStoreProductRequestDto;
 import com.vanmool.productservice.dtos.FakeStoreRequestDto;
 import com.vanmool.productservice.dtos.FakeStoreResponseDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
@@ -20,7 +19,7 @@ import java.util.List;
 
 @Service("fakeStoreProductService")
 public class FakeStoreProductService implements ProductService{
-    RestTemplate restTemplate;
+    private final RestTemplate restTemplate;
 
     public FakeStoreProductService(RestTemplate restTemplate) {
 

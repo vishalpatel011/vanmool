@@ -1,0 +1,233 @@
+# Vanmool
+
+Vanmool is a backend e-commerce platform that connects rural and tribal producers, artisans and makers of natural and traditional products with customers in cities.
+
+It is built as Java / Spring Boot microservices in a single repository, as the Scaler backend capstone project, and is designed so that it can grow into a real small business.
+
+## The problem
+
+Producers in rural and tribal regions of Gujarat and similar areas make wooden crafts and toys, bamboo baskets, ragi and millet foods and other natural products. They have limited digital reach and only fragmented access to customers in cities. General-purpose marketplaces reduce these products to a name and a price, and lose what makes them worth buying: who made them, where, from what, and how.
+
+## The solution
+
+Vanmool gives these producers a structured digital storefront, and covers the full purchase flow behind it: catalog and search, cart, checkout, inventory, payments and notifications.
+
+Products are meant to carry their origin and story, not just catalog data:
+
+| Field | Example |
+|---|---|
+| Product | Handcrafted Bamboo Basket |
+| Category | Traditional Crafts |
+| Origin | Dangs, Gujarat |
+| Producer | Local artisan cooperative |
+| Materials | Bamboo |
+| Story | Woven by hand using traditional techniques |
+
+Today the catalog stores name, description, price, image and category. Origin, producer, materials and story are planned additions to the product model.
+
+## Architecture
+
+Vanmool is split into services along business boundaries. Each service is an independent Spring Boot application that can be built, run and deployed on its own.
+
+- **Database per service.** Each service owns its data (for example, `product_db` for the product service). No service reads or writes another service's tables, and there are no cross-service foreign keys; services refer to each other's data by id.
+- **REST** for requests that need an answer immediately, such as the order service asking the product service for a current price.
+- **Kafka** for domain events that other services react to asynchronously, such as `OrderCreated` or `PaymentSucceeded`.
+- **API Gateway and Eureka** give clients a single entry point and let services find each other without hardcoded addresses.
+
+Target architecture (services are added one at a time; the table below shows what exists today):
+
+```
+                      Client
+                        |
+                   API Gateway  ----  Service Discovery (Eureka)
+                        |
+     +---------+--------+--+-----------+---------+
+     |         |           |           |         |
+   Auth     Product    Inventory     Cart      Order
+     |         |           |           |         |
+   MySQL     MySQL       MySQL       Redis     MySQL
+                                                 |
+                                               Kafka
+                                                 |
+                                   +-------------+-------------+
+                                   |                           |
+                                Payment                  Notification
+                                   |
+                         Razorpay / Stripe
+```
+
+| Service | Responsibility | Storage | Status |
+|---|---|---|---|
+| `product-service` | Product catalog: products, categories, search, pagination | MySQL (`product_db`) | In progress |
+| `user-auth-service` | Signup, login, password hashing, JWT, roles | MySQL | Planned |
+| `inventory-service` | Stock levels, reservation and release | MySQL | Planned |
+| `cart-service` | Shopping carts | Redis | Planned |
+| `order-service` | Orders and the order lifecycle | MySQL | Planned |
+| `payment-service` | Payments, webhooks and reconciliation (Razorpay, Stripe) | MySQL | Planned |
+| `notification-service` | Order and payment notifications from Kafka events | | Planned |
+| `api-gateway` | Single entry point and request routing | | Planned |
+| `service-discovery` | Eureka service registry | | Planned |
+
+## Tech stack
+
+| Technology | Purpose | Status |
+|---|---|---|
+| Java 17 | Language | In use |
+| Spring Boot 3.5 (Web, Data JPA) | REST APIs and persistence | In use |
+| Hibernate / JPA | Object-relational mapping | In use |
+| MySQL 8 | Relational database | In use |
+| RestTemplate | Calls to third-party HTTP APIs | In use |
+| json-patch | JSON Patch support for `PATCH` requests | In use |
+| Lombok | Boilerplate reduction | In use |
+| Maven (wrapper included) | Build | In use |
+| Spring Security, JWT, BCrypt, OAuth2 | Authentication and authorization | Planned |
+| Redis | Product cache and cart storage | Planned |
+| Apache Kafka | Domain events between services | Planned |
+| Spring Cloud Gateway, Eureka | Routing and service discovery | Planned |
+| Razorpay, Stripe | Payments | Planned |
+| Docker | Containers and local infrastructure | Planned |
+| AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
+
+## Repository structure
+
+```
+vanmool/
+├── pom.xml              Maven aggregator: builds every service
+├── mvnw, mvnw.cmd       Maven wrapper
+├── .mvn/
+├── .env.example         environment variables the services read
+└── product-service/     product catalog service
+    ├── pom.xml
+    └── src/
+        ├── main/java/com/vanmool/productservice/
+        │   ├── controllers/    REST endpoints
+        │   ├── services/       business logic (ProductService and its implementations)
+        │   ├── repositories/   Spring Data JPA repositories
+        │   ├── models/         JPA entities
+        │   ├── dtos/           request and response objects
+        │   ├── exceptions/     custom exceptions and the global exception handler
+        │   └── configs/        Spring configuration
+        └── test/
+```
+
+Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xml` only lists the services as modules, so one command builds all of them.
+
+## Getting started
+
+### Prerequisites
+
+- JDK 17 or newer
+- MySQL 8
+- Maven is not required; the repository includes the Maven wrapper.
+
+### 1. Create the database
+
+Run as a MySQL administrator, using your own user name and password:
+
+```sql
+CREATE DATABASE product_db;
+CREATE USER 'vanmool_user'@'localhost' IDENTIFIED BY 'choose-a-password';
+GRANT ALL PRIVILEGES ON product_db.* TO 'vanmool_user'@'localhost';
+```
+
+Until database migrations are introduced, Hibernate creates and updates the tables on startup (`spring.jpa.hibernate.ddl-auto=update`).
+
+### 2. Set the environment variables
+
+The product service reads its database connection from the environment. `.env.example` lists the variables:
+
+| Variable | Description | Default |
+|---|---|---|
+| `DB_URL` | JDBC URL of the product database | `jdbc:mysql://localhost:3306/product_db` |
+| `DB_USERNAME` | Database user | `ProductService_user` |
+| `DB_PASSWORD` | Database password | empty |
+
+- **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
+- **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
+
+Never commit real credentials. `.env` is git-ignored for this reason.
+
+### 3. Build and test
+
+```
+./mvnw verify          # Git Bash, macOS, Linux
+.\mvnw.cmd verify      # Windows PowerShell or cmd
+```
+
+To build a single service: `./mvnw -pl product-service verify`.
+
+### 4. Run
+
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`.
+- **Command line:** `./mvnw -pl product-service spring-boot:run`
+
+The product service listens on `http://localhost:8080`.
+
+## Product Service API
+
+| Method | Path | Success | Errors |
+|---|---|---|---|
+| GET | `/products` | 200, list of products | |
+| GET | `/products/{id}` | 200, the product | 404 product not found |
+| POST | `/products` | 201, the created product | |
+| PUT | `/products/{id}` | 200, the replaced product | 404 product not found |
+| PATCH | `/products/{id}` | 200, the patched product | 400 invalid patch, 404 product not found |
+
+Request body for `POST` and `PUT`:
+
+```json
+{
+  "name": "Handcrafted Bamboo Basket",
+  "price": 450,
+  "description": "Woven by hand in Dangs, Gujarat",
+  "imageUrl": "https://example.com/images/bamboo-basket.jpg",
+  "category": "Traditional Crafts"
+}
+```
+
+A new category name creates the category; an existing name reuses it. `PUT` replaces every field of an existing product. It does not create a product at a client-chosen id, because ids are generated by the database.
+
+`PATCH` takes a JSON Patch document (`Content-Type: application/json-patch+json`), applied to the product as `GET` returns it:
+
+```json
+[{ "op": "replace", "path": "/price", "value": 550 }]
+```
+
+Errors are returned as:
+
+```json
+{ "message": "Product with id 999 not found", "status": "Failure" }
+```
+
+The service has two implementations of the `ProductService` interface: `ProductDbService`, backed by MySQL and used by the API, and `FakeStoreProductService`, backed by the public FakeStore API through `RestTemplate`, which shows how a third-party API is integrated behind the same interface.
+
+## Testing
+
+The product service currently has one Spring Boot test that starts the full application context, so it needs a running MySQL. Unit tests for the service layer and MockMvc controller tests with JSON assertions are the next part of the roadmap.
+
+## Roadmap
+
+- [x] REST API for products with correct HTTP methods and status codes
+- [x] Centralized exception handling with `@RestControllerAdvice`
+- [x] Third-party API integration with `RestTemplate`
+- [x] Persistence with Spring Data JPA, Hibernate and MySQL
+- [x] Database settings read from environment variables
+- [ ] UUID identifiers and database migrations
+- [ ] Fetch types, query methods and query tuning
+- [ ] Unit tests, MockMvc controller tests, JSON assertions, test doubles
+- [ ] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2
+- [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
+- [ ] Redis: product caching and cart storage
+- [ ] Product search, pagination, sorting and filtering
+- [ ] Kafka domain events
+- [ ] Payment Service: Razorpay and Stripe, webhooks, reconciliation
+- [ ] Inventory, Cart, Order and Notification services
+- [ ] Spring Cloud: Eureka service discovery and API Gateway
+- [ ] Docker and Docker Compose
+
+## Future scope
+
+- Producer onboarding and tools for producers to manage their own listings
+- Richer product search and recommendations
+- Logistics and shipping integration
+- Web and mobile clients

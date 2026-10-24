@@ -52,7 +52,7 @@ public class ProductController {
     }
 
     @PutMapping("/products/{id}")
-    public ProductResponseDto replaceProduct(@PathVariable("id") long id, @RequestBody CreateFakeStoreProductRequestDto createFakeStoreProductRequestDto){
+    public ProductResponseDto replaceProduct(@PathVariable("id") long id, @RequestBody CreateFakeStoreProductRequestDto createFakeStoreProductRequestDto) throws ProductNotFoundException {
         Product product = productService.replaceProduct(
                 id,
                 createFakeStoreProductRequestDto.getName(),

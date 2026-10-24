@@ -1,6 +1,9 @@
 package com.vanmool.productservice.exceptions;
 
 import com.vanmool.productservice.dtos.ErrorDto;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.github.fge.jsonpatch.JsonPatchException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -8,14 +11,25 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
     @ExceptionHandler(NullPointerException.class)
-    public ErrorDto handleNullPointerException() {
+    public ResponseEntity<ErrorDto> handleNullPointerException(NullPointerException e) {
+        // The client gets a generic message, so log the real cause for us
+        log.error("Null value encountered", e);
         ErrorDto errorDto = new ErrorDto();
         errorDto.setMessage("Null value encountered");
         errorDto.setStatus("Failure");
-        return errorDto;
+        return new ResponseEntity<>(errorDto, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @ExceptionHandler({JsonPatchException.class, JsonProcessingException.class})
+    public ResponseEntity<ErrorDto> handleInvalidPatch() {
+        ErrorDto errorDto = new ErrorDto();
+        errorDto.setStatus("Failure");
+        errorDto.setMessage("Patch could not be applied to the product");
+        return new ResponseEntity<>(errorDto, HttpStatus.BAD_REQUEST);
     }
 
     @ExceptionHandler(ProductNotFoundException.class)

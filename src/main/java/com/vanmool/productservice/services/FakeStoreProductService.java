@@ -3,6 +3,7 @@ package com.vanmool.productservice.services;
 import com.vanmool.productservice.dtos.CreateFakeStoreProductRequestDto;
 import com.vanmool.productservice.dtos.FakeStoreRequestDto;
 import com.vanmool.productservice.dtos.FakeStoreResponseDto;
+import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Product;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -74,22 +75,22 @@ public class FakeStoreProductService implements ProductService{
         // Get existing product
         Product existingProduct = getProductById(id);
 
-        // Convert Product to JSON Format
+        // Convert Product to the same JSON that GET returns (the DTO)
         ObjectMapper objectMapper = new ObjectMapper();
-        JsonNode productNode = objectMapper.valueToTree(existingProduct);
+        JsonNode productNode = objectMapper.valueToTree(ProductResponseDto.from(existingProduct));
 
         // Apply Patch
         JsonNode patchedNode = patch.apply(productNode);
 
-        //Convert back to Product
-        Product patchedProduct = objectMapper.treeToValue(patchedNode, Product.class);
+        //Convert back to the DTO
+        ProductResponseDto patchedProduct = objectMapper.treeToValue(patchedNode, ProductResponseDto.class);
 
         return replaceProduct(id,
                 patchedProduct.getName(),
                 patchedProduct.getDescription(),
                 patchedProduct.getPrice(),
-                patchedProduct.getCategory().getName(),
-                patchedProduct.getImageUrl()
+                patchedProduct.getImageUrl(),
+                patchedProduct.getCategory()
         );
     }
 

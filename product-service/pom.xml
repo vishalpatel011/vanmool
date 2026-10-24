@@ -9,9 +9,9 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.vanmool</groupId>
-    <artifactId>ProductService</artifactId>
+    <artifactId>product-service</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>ProductService</name>
+    <name>product-service</name>
     <description>ProductService</description>
     <url/>
     <licenses>

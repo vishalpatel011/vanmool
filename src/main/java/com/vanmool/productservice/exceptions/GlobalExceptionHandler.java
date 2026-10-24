@@ -1,6 +1,6 @@
-package com.dev.productservice.exceptions;
+package com.vanmool.productservice.exceptions;
 
-import com.dev.productservice.dtos.ErrorDto;
+import com.vanmool.productservice.dtos.ErrorDto;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;

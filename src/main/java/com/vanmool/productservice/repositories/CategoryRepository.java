@@ -1,6 +1,6 @@
-package com.dev.productservice.repositories;
+package com.vanmool.productservice.repositories;
 
-import com.dev.productservice.models.Category;
+import com.vanmool.productservice.models.Category;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;

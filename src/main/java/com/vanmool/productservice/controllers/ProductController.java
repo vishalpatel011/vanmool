@@ -1,10 +1,10 @@
-package com.dev.productservice.controllers;
+package com.vanmool.productservice.controllers;
 
-import com.dev.productservice.dtos.CreateFakeStoreProductRequestDto;
-import com.dev.productservice.dtos.ProductResponseDto;
-import com.dev.productservice.exceptions.ProductNotFoundException;
-import com.dev.productservice.models.Product;
-import com.dev.productservice.services.ProductService;
+import com.vanmool.productservice.dtos.CreateFakeStoreProductRequestDto;
+import com.vanmool.productservice.dtos.ProductResponseDto;
+import com.vanmool.productservice.exceptions.ProductNotFoundException;
+import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.services.ProductService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;

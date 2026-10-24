@@ -1,4 +1,4 @@
-package com.dev.productservice.configs;
+package com.vanmool.productservice.configs;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

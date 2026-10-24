@@ -1,6 +1,6 @@
-package com.dev.productservice;
+package com.vanmool.productservice;
 
-import com.dev.productservice.models.Product;
+import com.vanmool.productservice.models.Product;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 

@@ -1,4 +1,4 @@
-package com.dev.productservice.dtos;
+package com.vanmool.productservice.dtos;
 
 import lombok.Getter;
 import lombok.Setter;

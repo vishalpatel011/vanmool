@@ -1,14 +1,14 @@
-package com.dev.productservice.dtos;
+package com.vanmool.productservice.dtos;
 
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
-public class CreateFakeStoreProductRequestDto {
-    private String name;
+public class FakeStoreRequestDto {
+    private String title;
     private double price;
     private String description;
-    private String imageUrl;
+    private String image;
     private String category;
 }

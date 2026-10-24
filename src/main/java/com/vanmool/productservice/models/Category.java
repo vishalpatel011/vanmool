@@ -1,4 +1,4 @@
-package com.dev.productservice.models;
+package com.vanmool.productservice.models;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.ManyToOne;

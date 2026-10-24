@@ -1,10 +1,10 @@
-package com.dev.productservice.services;
+package com.vanmool.productservice.services;
 
-import com.dev.productservice.exceptions.ProductNotFoundException;
-import com.dev.productservice.models.Category;
-import com.dev.productservice.models.Product;
-import com.dev.productservice.repositories.CategoryRepository;
-import com.dev.productservice.repositories.ProductRepository;
+import com.vanmool.productservice.exceptions.ProductNotFoundException;
+import com.vanmool.productservice.models.Category;
+import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.repositories.CategoryRepository;
+import com.vanmool.productservice.repositories.ProductRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;

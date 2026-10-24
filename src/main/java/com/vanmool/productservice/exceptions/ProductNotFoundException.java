@@ -1,4 +1,4 @@
-package com.dev.productservice.exceptions;
+package com.vanmool.productservice.exceptions;
 
 public class ProductNotFoundException extends Exception{
     public ProductNotFoundException(String message) {

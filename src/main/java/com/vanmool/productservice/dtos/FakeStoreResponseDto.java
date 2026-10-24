@@ -1,7 +1,7 @@
-package com.dev.productservice.dtos;
+package com.vanmool.productservice.dtos;
 
-import com.dev.productservice.models.Category;
-import com.dev.productservice.models.Product;
+import com.vanmool.productservice.models.Category;
+import com.vanmool.productservice.models.Product;
 import lombok.Getter;
 import lombok.Setter;
 

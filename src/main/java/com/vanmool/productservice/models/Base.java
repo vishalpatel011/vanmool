@@ -1,4 +1,4 @@
-package com.dev.productservice.models;
+package com.vanmool.productservice.models;
 
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;

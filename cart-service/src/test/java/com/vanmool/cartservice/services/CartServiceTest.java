@@ -3,6 +3,7 @@ package com.vanmool.cartservice.services;
 import com.vanmool.cartservice.clients.ProductClient;
 import com.vanmool.cartservice.clients.ProductDetails;
 import com.vanmool.cartservice.dtos.CartItemResponseDto;
+import com.vanmool.cartservice.dtos.CartLineDto;
 import com.vanmool.cartservice.dtos.CartResponseDto;
 import com.vanmool.cartservice.exceptions.CartLimitExceededException;
 import com.vanmool.cartservice.exceptions.ProductNotFoundException;
@@ -298,6 +299,16 @@ class CartServiceTest {
 
         // Assert
         verify(cartRepository).removeProduct(USER_ID, REMOVED_ID);
+        verifyNoInteractions(productClient);
+    }
+
+    @Test
+    void getItems_returnsIdsAndQuantitiesInProductIdOrder_withoutAskingTheCatalog() {
+        // Arrange
+        when(cartRepository.findItems(USER_ID)).thenReturn(items(BASKET_ID, 2, BISCUITS_ID, 3));
+
+        // Act & Assert: UUID order puts 837a0c5a... (biscuits) before 150dac81... (basket)
+        assertEquals(List.of(new CartLineDto(BISCUITS_ID, 3), new CartLineDto(BASKET_ID, 2)), cartService.getItems(USER_ID));
         verifyNoInteractions(productClient);
     }
 

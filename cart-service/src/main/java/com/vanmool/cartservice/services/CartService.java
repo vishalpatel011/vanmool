@@ -3,6 +3,7 @@ package com.vanmool.cartservice.services;
 import com.vanmool.cartservice.clients.ProductClient;
 import com.vanmool.cartservice.clients.ProductDetails;
 import com.vanmool.cartservice.dtos.CartItemResponseDto;
+import com.vanmool.cartservice.dtos.CartLineDto;
 import com.vanmool.cartservice.dtos.CartResponseDto;
 import com.vanmool.cartservice.exceptions.CartLimitExceededException;
 import com.vanmool.cartservice.exceptions.ProductNotFoundException;
@@ -57,6 +58,14 @@ public class CartService {
         lines.sort(Comparator.comparing(CartItemResponseDto::name, Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(CartItemResponseDto::productId));
         return new CartResponseDto(lines, totalQuantity, totalPrice);
+    }
+
+    // The product ids and quantities only, in product id order, without asking product-service
+    public List<CartLineDto> getItems(UUID userId) {
+        return cartRepository.findItems(userId).entrySet().stream()
+                .map(item -> new CartLineDto(item.getKey(), item.getValue()))
+                .sorted(Comparator.comparing(CartLineDto::productId))
+                .toList();
     }
 
     // Adds to the quantity already in the cart. The product must exist in the catalog

@@ -89,6 +89,11 @@ class CartFlowIT {
         assertEquals(Map.of(BASKET_ID.toString(), "2", BISCUITS_ID.toString(), "3"),
                 redis.opsForHash().entries("cart:" + userId));
 
+        // The plain list for checkout comes from Redis alone
+        mockMvc.perform(get("/cart/items").with(tokenFor(userId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)));
+
         // Set the biscuits to 1
         mockMvc.perform(put("/cart/items/{productId}", BISCUITS_ID).with(tokenFor(userId))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"quantity\": 1}"))

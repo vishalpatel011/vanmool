@@ -2,6 +2,7 @@ package com.vanmool.cartservice.controllers;
 
 import com.vanmool.cartservice.configs.SecurityConfig;
 import com.vanmool.cartservice.dtos.CartItemResponseDto;
+import com.vanmool.cartservice.dtos.CartLineDto;
 import com.vanmool.cartservice.dtos.CartResponseDto;
 import com.vanmool.cartservice.exceptions.CartLimitExceededException;
 import com.vanmool.cartservice.exceptions.ProductNotFoundException;
@@ -127,6 +128,18 @@ class CartControllerWebMvcTest {
                               "totalQuantity": 2,
                               "totalPrice": 999.98
                             }""", JsonCompareMode.STRICT));
+        }
+
+        @Test
+        void items_areIdsAndQuantitiesOnly() throws Exception {
+            // Arrange
+            when(cartService.getItems(USER_ID)).thenReturn(List.of(new CartLineDto(BASKET_ID, 2)));
+
+            // Act & Assert
+            mockMvc.perform(get("/cart/items").with(userToken()))
+                    .andExpect(status().isOk())
+                    .andExpect(content().json("[{\"productId\": \"150dac81-6130-4903-9385-9b682db879b3\", \"quantity\": 2}]",
+                            JsonCompareMode.STRICT));
         }
 
         @Test

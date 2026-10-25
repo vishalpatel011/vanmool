@@ -1,6 +1,7 @@
 package com.vanmool.cartservice.controllers;
 
 import com.vanmool.cartservice.dtos.AddCartItemRequestDto;
+import com.vanmool.cartservice.dtos.CartLineDto;
 import com.vanmool.cartservice.dtos.CartResponseDto;
 import com.vanmool.cartservice.dtos.UpdateCartItemRequestDto;
 import com.vanmool.cartservice.exceptions.NotAUserTokenException;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 // The cart of the signed-in user. There is no user id in any path: it comes from the token's subject, so a user can
@@ -35,6 +37,12 @@ public class CartController {
     @GetMapping
     public CartResponseDto getCart(@AuthenticationPrincipal Jwt jwt) {
         return cartService.getCart(userId(jwt));
+    }
+
+    // Only ids and quantities, from Redis alone: for checkout, which takes its prices from the stock reservation
+    @GetMapping("/items")
+    public List<CartLineDto> getItems(@AuthenticationPrincipal Jwt jwt) {
+        return cartService.getItems(userId(jwt));
     }
 
     // Not idempotent: each request adds its quantity again (an "Add to cart" button)

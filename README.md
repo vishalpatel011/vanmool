@@ -64,7 +64,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | `cart-service` | Shopping carts of signed-in users, priced with current product prices | Redis | In progress |
 | `order-service` | Checkout from the cart, order history, the order lifecycle and cancellation | MySQL (`order_db`) | In progress |
 | `payment-service` | Payments, webhooks and reconciliation (Razorpay, Stripe) | MySQL | Planned |
-| `notification-service` | Order and payment notifications from Kafka events | | Planned |
+| `notification-service` | Emails for events on Kafka: welcome, order placed, order cancelled | Redis (handled event ids) | In progress |
 | `api-gateway` | Single entry point and request routing | | Planned |
 | `service-discovery` | Eureka service registry | | Planned |
 
@@ -90,6 +90,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | Redis | Cart storage | In use |
 | Apache Kafka 3.9 (Spring for Apache Kafka) | Domain events between services, sent through a transactional outbox | In use |
 | Mailpit | Catches the emails sent in development and shows them in a web page | In use |
+| Spring Mail (Jakarta Mail) | Sending email over SMTP | In use |
 | RestClient | Calls between services (cart to product), with timeouts | In use |
 | Spring Cloud Gateway, Eureka | Routing and service discovery | Planned |
 | Razorpay, Stripe | Payments | Planned |
@@ -109,6 +110,7 @@ vanmool/
 ├── user-auth-service/   accounts, login and tokens (same layout as product-service)
 ├── cart-service/       shopping carts in Redis (same layout; clients/ holds the call to product-service)
 ├── order-service/      orders (same layout; clients/ holds the calls to cart-service and product-service)
+├── notification-service/  emails from Kafka events (events/ listeners, emails/ composing and sending; no HTTP API)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
@@ -209,14 +211,14 @@ Never commit real credentials. `.env` is git-ignored for this reason.
 .\mvnw.cmd verify      # the same from Windows PowerShell or cmd
 ```
 
-To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user-auth-service verify`, `./mvnw -pl cart-service verify` or `./mvnw -pl order-service verify`.
+To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user-auth-service verify`, `./mvnw -pl cart-service verify`, `./mvnw -pl order-service verify` or `./mvnw -pl notification-service verify`.
 
 ### 5. Run
 
-- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication` or `OrderServiceApplication`.
-- **Command line:** `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`)
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication` or `NotificationServiceApplication`.
+- **Command line:** `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`)
 
-The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082` and the order service on `http://localhost:8083`, so all of them can run at once. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082` and the order service on `http://localhost:8083`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
 
 ## Product Service API
 
@@ -581,6 +583,29 @@ MSYS_NO_PATHCONV=1 docker compose exec kafka /opt/kafka/bin/kafka-console-consum
 
 (`MSYS_NO_PATHCONV=1` is only needed in Git Bash on Windows.)
 
+## Notification Service
+
+The notification service has no API. It reads `user-events` and `order-events` from Kafka and sends an email for each event a customer should hear about:
+
+| Event | Email |
+|---|---|
+| `UserRegistered` | "Welcome to Vanmool", to the new account's address |
+| `OrderPlaced` | "Your Vanmool order 7c9e6679 is placed": each product with its quantity and line total, the total in rupees (₹1,359.98), and the delivery address |
+| `OrderCancelled` | "Your Vanmool order 7c9e6679 is cancelled" |
+
+- **Each email once.** Kafka can deliver an event twice. The service records the id of every event whose email went out in Redis (`notification:event:{eventId}`, kept 7 days) and skips an event it has seen. The record is written after the email was sent: if the mail server fails, nothing is recorded and the event is tried again. If Redis itself is unreachable, the email is sent anyway (one email too many is better than none).
+- **Failures.** An email that cannot be sent is tried again every 2 seconds, 10 times, then the event is published to `user-events.notification-service.DLT` or `order-events.notification-service.DLT`. A message that is not a valid event goes there at once.
+- **SMTP.** Locally the emails go to Mailpit: open http://localhost:8025 to read them. In a deployment the same settings point at a real SMTP service such as Amazon SES.
+
+| Variable | Description | Default |
+|---|---|---|
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | `localhost:9092` |
+| `MAIL_HOST`, `MAIL_PORT` | SMTP server | `localhost`, `1025` (Mailpit) |
+| `MAIL_USERNAME`, `MAIL_PASSWORD` | SMTP login, if the server needs one | empty |
+| `MAIL_SMTP_AUTH`, `MAIL_SMTP_STARTTLS` | `true` for a real SMTP service | `false` |
+| `MAIL_FROM` | Sender of every email | `Vanmool <orders@vanmool.example>` |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Redis, for the ids of handled events | `localhost`, `6379`, empty |
+
 ## Testing
 
 Tests follow the testing pyramid: many fast unit tests, a few slower integration tests.
@@ -623,7 +648,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Cart service: carts in Redis, current prices from the product service, JWTs checked with the user-auth service's public keys
 - [x] Order service: checkout from the cart with stock reservations, Idempotency-Key, order history, cancellation
 - [x] Stock and stock reservations (inside the product service)
-- [ ] Notification service
+- [x] Notification service: welcome, order and cancellation emails from Kafka events, each sent once
 - [ ] Spring Cloud: Eureka service discovery and API Gateway
 - [ ] Docker and Docker Compose
 

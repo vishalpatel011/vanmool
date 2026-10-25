@@ -83,6 +83,11 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-mysql</artifactId>
         </dependency>
+        <!-- Kafka consumer: releases stock when order-service publishes OrderCancelled -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
         <!-- Redis client (Lettuce) and Spring Data Redis: the product cache -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

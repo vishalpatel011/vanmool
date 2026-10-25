@@ -12,36 +12,35 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.Base64;
-import java.util.HexFormat;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class UserServiceImpl implements UserService {
     // A BCrypt hash (cost 12) of a random value nobody knows. Login checks the password against it when the email is
     // unknown, so that case takes as long as a wrong password and response times do not reveal which emails exist
     private static final String UNKNOWN_USER_HASH = "$2a$12$rZSmHB3WppxfABBsK6.JLeCgmD/65w2.y2lpfo4UZYQCTRv2mqtE2";
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final UserRepository userRepository;
     private final TokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
     private final Clock clock;
     private final Duration tokenValidity;
 
     public UserServiceImpl(UserRepository userRepository, TokenRepository tokenRepository, PasswordEncoder passwordEncoder,
-                           Clock clock, @Value("${auth.token-validity}") Duration tokenValidity) {
+                           JwtService jwtService, Clock clock, @Value("${auth.token-validity}") Duration tokenValidity) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.passwordEncoder = passwordEncoder;
+        this.jwtService = jwtService;
         this.clock = clock;
         this.tokenValidity = tokenValidity;
     }
@@ -67,7 +66,9 @@ public class UserServiceImpl implements UserService {
         }
     }
 
+    // One transaction: if creating the JWT fails after the token row is saved, the row is rolled back
     @Override
+    @Transactional
     public IssuedToken login(String email, String password) {
         Optional<User> userOptional = userRepository.findByEmail(normalizeEmail(email));
         if(userOptional.isEmpty()) {
@@ -79,33 +80,40 @@ public class UserServiceImpl implements UserService {
             throw new InvalidCredentialsException();
         }
 
-        // 32 random bytes (256 bits) from a cryptographic generator, so a token cannot be guessed
-        byte[] randomBytes = new byte[32];
-        SECURE_RANDOM.nextBytes(randomBytes);
-        String tokenValue = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
-
+        // The token row is saved first: its generated id becomes the JWT's "jti", which logout uses to revoke it.
+        // Whole seconds, because that is all a JWT's iat and exp can hold
+        Instant issuedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS);
         Token token = new Token();
         token.setUser(user);
-        token.setTokenHash(sha256(tokenValue));
-        token.setExpiresAt(clock.instant().plus(tokenValidity));
-        tokenRepository.save(token);
-        return new IssuedToken(tokenValue, token.getExpiresAt());
+        token.setExpiresAt(issuedAt.plus(tokenValidity));
+        Token savedToken = tokenRepository.save(token);
+
+        String jwt = jwtService.issue(user, savedToken.getId(), issuedAt, savedToken.getExpiresAt());
+        return new IssuedToken(jwt, savedToken.getExpiresAt());
     }
 
     @Override
-    public void logout(String tokenValue) {
-        // Logging out an unknown or already revoked token is not an error: the result is the same, the token is unusable
-        tokenRepository.findByTokenHash(sha256(tokenValue)).ifPresent(token -> {
+    public void logout(String jwt) {
+        // Logging out an invalid, expired or already revoked token is not an error: either way the token is unusable
+        UUID tokenId;
+        try {
+            tokenId = tokenIdOf(jwt);
+        } catch (InvalidTokenException e) {
+            return;
+        }
+        tokenRepository.findById(tokenId).ifPresent(token -> {
             token.setRevoked(true);
             tokenRepository.save(token);
         });
     }
 
     @Override
-    public User validateToken(String tokenValue) {
-        return tokenRepository.findByTokenHash(sha256(tokenValue))
+    public User validateToken(String jwt) {
+        // The signature, issuer and expiry are checked first, without the database; then the token's row, so a
+        // token ended by logout is refused even though its signature is still good
+        UUID tokenId = tokenIdOf(jwt);
+        return tokenRepository.findWithUserById(tokenId)
                 .filter(token -> !token.isRevoked())
-                .filter(token -> token.getExpiresAt().isAfter(clock.instant()))
                 .map(Token::getUser)
                 .orElseThrow(InvalidTokenException::new);
     }
@@ -114,14 +122,16 @@ public class UserServiceImpl implements UserService {
         return email.trim().toLowerCase(Locale.ROOT);
     }
 
-    // Tokens are long random values, so a plain SHA-256 is enough to store them safely; BCrypt's slowness is only
-    // needed for passwords, which people choose and attackers can guess
-    private static String sha256(String value) {
+    private UUID tokenIdOf(String jwt) {
+        String jti = jwtService.verify(jwt).getId();
+        // A genuine signature but no usable jti would not be a token this service handed out
+        if(jti == null) {
+            throw new InvalidTokenException();
+        }
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is missing from this JVM", e);
+            return UUID.fromString(jti);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidTokenException();
         }
     }
 }

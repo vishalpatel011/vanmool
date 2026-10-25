@@ -10,5 +10,5 @@ import java.util.UUID;
 public interface TokenRepository extends JpaRepository<Token, UUID> {
     // A valid token is answered with its user and roles, so they are fetched in the same query (open-in-view is off)
     @EntityGraph(attributePaths = {"user", "user.roles"})
-    Optional<Token> findByTokenHash(String tokenHash);
+    Optional<Token> findWithUserById(UUID id);
 }

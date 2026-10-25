@@ -17,16 +17,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.HexFormat;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,10 +39,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-// Plain unit test: repositories and the password encoder are Mockito mocks (no database, no slow BCrypt), and the
-// clock is fixed, so token expiry can be checked to the exact instant
+// Plain unit test: repositories and the password encoder are Mockito mocks (no database, no slow BCrypt). JwtService
+// is real, with a test key: signing and checking JWTs is part of the behaviour under test. The clock is fixed, so
+// token expiry can be checked to the exact second
 @ExtendWith(MockitoExtension.class)
 class UserServiceImplTest {
     private static final Instant NOW = Instant.parse("2026-10-25T10:00:00Z");
@@ -57,16 +59,22 @@ class UserServiceImplTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
+    private final JwtService jwtService = new JwtService(Jwts.SIG.HS256.key().build(), Clock.fixed(NOW, ZoneOffset.UTC));
+
     private UserServiceImpl userService;
 
     @BeforeEach
     void setUp() {
-        userService = new UserServiceImpl(userRepository, tokenRepository, passwordEncoder,
+        userService = new UserServiceImpl(userRepository, tokenRepository, passwordEncoder, jwtService,
                 Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY);
     }
 
+    private static final UUID ASHA_ID = UUID.fromString("5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10");
+    private static final UUID TOKEN_ID = UUID.fromString("0f6e2b8a-77d4-4e8a-b1f3-3c2d9a5e4b71");
+
     private static User asha() {
         User user = new User();
+        user.setId(ASHA_ID);
         user.setName("Asha Gamit");
         user.setEmail("asha@example.com");
         user.setPasswordHash("$2a$12$ashasHash");
@@ -82,9 +90,17 @@ class UserServiceImplTest {
         return token;
     }
 
-    // The service stores SHA-256 hashes of tokens; the test computes the same hash with the JDK to look them up
-    private static String sha256(String value) throws Exception {
-        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    // save() gives the token its generated id, as Hibernate does on insert
+    private void saveAssignsTokenIds() {
+        when(tokenRepository.save(any(Token.class))).thenAnswer(invocation -> {
+            Token token = invocation.getArgument(0);
+            token.setId(UUID.randomUUID());
+            return token;
+        });
+    }
+
+    private String jwtFor(User user, UUID tokenId) {
+        return jwtService.issue(user, tokenId, NOW, NOW.plus(TOKEN_VALIDITY));
     }
 
     @Nested
@@ -140,11 +156,12 @@ class UserServiceImplTest {
     @Nested
     class Login {
         @Test
-        void correctPassword_returnsATokenAndStoresOnlyItsHash() throws Exception {
+        void correctPassword_returnsASignedJwtWhoseIdIsTheSavedTokenRow() {
             // Arrange
             User asha = asha();
             when(userRepository.findByEmail("asha@example.com")).thenReturn(Optional.of(asha));
             when(passwordEncoder.matches("correct horse battery", "$2a$12$ashasHash")).thenReturn(true);
+            saveAssignsTokenIds();
 
             // Act: the email is matched in any letter case, like at signup
             IssuedToken issued = userService.login(" ASHA@example.com", "correct horse battery");
@@ -152,14 +169,14 @@ class UserServiceImplTest {
             // Assert
             ArgumentCaptor<Token> saved = ArgumentCaptor.forClass(Token.class);
             verify(tokenRepository).save(saved.capture());
+            Claims claims = jwtService.verify(issued.value());
             assertAll(
-                    () -> assertEquals(sha256(issued.value()), saved.getValue().getTokenHash()),
-                    () -> assertNotEquals(issued.value(), saved.getValue().getTokenHash()),
+                    () -> assertEquals(saved.getValue().getId().toString(), claims.getId()),
+                    () -> assertEquals(ASHA_ID.toString(), claims.getSubject()),
                     () -> assertSame(asha, saved.getValue().getUser()),
                     () -> assertEquals(NOW.plus(TOKEN_VALIDITY), saved.getValue().getExpiresAt()),
                     () -> assertEquals(NOW.plus(TOKEN_VALIDITY), issued.expiresAt()),
-                    // 32 random bytes in URL-safe Base64 without padding
-                    () -> assertEquals(43, issued.value().length())
+                    () -> assertEquals(NOW.plus(TOKEN_VALIDITY), claims.getExpiration().toInstant())
             );
         }
 
@@ -168,12 +185,13 @@ class UserServiceImplTest {
             // Arrange
             when(userRepository.findByEmail("asha@example.com")).thenReturn(Optional.of(asha()));
             when(passwordEncoder.matches("correct horse battery", "$2a$12$ashasHash")).thenReturn(true);
+            saveAssignsTokenIds();
 
             // Act
             String first = userService.login("asha@example.com", "correct horse battery").value();
             String second = userService.login("asha@example.com", "correct horse battery").value();
 
-            // Assert
+            // Assert: each login is its own token row, so each JWT has its own jti
             assertNotEquals(first, second);
         }
 
@@ -203,13 +221,13 @@ class UserServiceImplTest {
     @Nested
     class Logout {
         @Test
-        void activeToken_isRevoked() throws Exception {
+        void validJwt_revokesItsTokenRow() {
             // Arrange
-            Token active = token(asha(), NOW.plusSeconds(60), false);
-            when(tokenRepository.findByTokenHash(sha256("token-value"))).thenReturn(Optional.of(active));
+            Token active = token(asha(), NOW.plus(TOKEN_VALIDITY), false);
+            when(tokenRepository.findById(TOKEN_ID)).thenReturn(Optional.of(active));
 
             // Act
-            userService.logout("token-value");
+            userService.logout(jwtFor(asha(), TOKEN_ID));
 
             // Assert
             assertTrue(active.isRevoked());
@@ -217,58 +235,60 @@ class UserServiceImplTest {
         }
 
         @Test
-        void unknownToken_changesNothingAndDoesNotFail() throws Exception {
-            // Arrange
-            when(tokenRepository.findByTokenHash(sha256("unknown"))).thenReturn(Optional.empty());
-
+        void invalidJwt_changesNothingAndDoesNotFail() {
             // Act
-            userService.logout("unknown");
+            userService.logout("not-a-jwt");
 
             // Assert
-            verify(tokenRepository, never()).save(any());
+            verifyNoInteractions(tokenRepository);
         }
     }
 
     @Nested
     class ValidateToken {
         @Test
-        void activeToken_returnsItsUser() throws Exception {
+        void validJwtWithAnActiveTokenRow_returnsItsUser() {
             // Arrange
             User asha = asha();
-            when(tokenRepository.findByTokenHash(sha256("token-value")))
-                    .thenReturn(Optional.of(token(asha, NOW.plusSeconds(1), false)));
+            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.of(token(asha, NOW.plus(TOKEN_VALIDITY), false)));
 
             // Act & Assert
-            assertSame(asha, userService.validateToken("token-value"));
+            assertSame(asha, userService.validateToken(jwtFor(asha, TOKEN_ID)));
         }
 
         @Test
-        void tokenExpiringExactlyNow_isRejected() throws Exception {
+        void tokenEndedByLogout_isRejectedAlthoughItsSignatureIsStillGood() {
             // Arrange
-            when(tokenRepository.findByTokenHash(sha256("token-value")))
-                    .thenReturn(Optional.of(token(asha(), NOW, false)));
+            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.of(token(asha(), NOW.plus(TOKEN_VALIDITY), true)));
 
             // Act & Assert
-            assertThrows(InvalidTokenException.class, () -> userService.validateToken("token-value"));
+            assertThrows(InvalidTokenException.class, () -> userService.validateToken(jwtFor(asha(), TOKEN_ID)));
         }
 
         @Test
-        void revokedToken_isRejectedEvenBeforeItExpires() throws Exception {
+        void validJwtWithoutATokenRow_isRejected() {
             // Arrange
-            when(tokenRepository.findByTokenHash(sha256("token-value")))
-                    .thenReturn(Optional.of(token(asha(), NOW.plusSeconds(3600), true)));
+            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.empty());
 
             // Act & Assert
-            assertThrows(InvalidTokenException.class, () -> userService.validateToken("token-value"));
+            assertThrows(InvalidTokenException.class, () -> userService.validateToken(jwtFor(asha(), TOKEN_ID)));
         }
 
         @Test
-        void unknownToken_isRejected() throws Exception {
+        void expiredJwt_isRejectedWithoutTouchingTheDatabase() {
             // Arrange
-            when(tokenRepository.findByTokenHash(sha256("made-up"))).thenReturn(Optional.empty());
+            String expired = jwtService.issue(asha(), TOKEN_ID, NOW.minus(TOKEN_VALIDITY), NOW.minusSeconds(1));
 
+            // Act & Assert
+            assertThrows(InvalidTokenException.class, () -> userService.validateToken(expired));
+            verifyNoInteractions(tokenRepository);
+        }
+
+        @Test
+        void malformedJwt_isRejectedWithoutTouchingTheDatabase() {
             // Act & Assert
             assertThrows(InvalidTokenException.class, () -> userService.validateToken("made-up"));
+            verifyNoInteractions(tokenRepository);
         }
     }
 }

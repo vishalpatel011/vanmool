@@ -300,7 +300,7 @@ Every new account has the `CUSTOMER` role.
 { "token": "5m9ew8_eJUU4RFqV69tOEITqm-Fa7SwkZi4ToZLFsZ0", "tokenType": "Bearer", "expiresAt": "2026-10-25T22:03:30Z" }
 ```
 
-The client sends the token on later requests as `Authorization: Bearer <token>` (for `/auth/logout` and `/auth/validate`). Tokens are valid for 10 hours (`auth.token-validity`) unless the user logs out first. The service stores only a SHA-256 hash of each token, so a copy of its database cannot be used to log in.
+The client sends the token on later requests as `Authorization: Bearer <token>` (for `/auth/logout` and `/auth/validate`). The token is a JWT signed with HS256: its payload carries the issuer, the user's id (`sub`), the token's id (`jti`), email, roles, and issue and expiry times. Tokens are valid for 10 hours (`auth.token-validity`) unless the user logs out first: logout marks the token's `jti` as revoked, and `/auth/validate` refuses it from then on. The signing key comes from the `JWT_SECRET` environment variable (Base64 of at least 32 random bytes, for example from `openssl rand -base64 32`); every instance must use the same key. Without it the service signs with a random key made at startup, which is only suitable for local development: tokens stop working when it restarts.
 
 A wrong password and an unknown email get the same `401 INVALID_CREDENTIALS` answer, after the same BCrypt work, so the API does not reveal which emails have accounts.
 

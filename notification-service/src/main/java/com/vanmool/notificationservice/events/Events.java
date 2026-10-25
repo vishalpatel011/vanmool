@@ -3,6 +3,7 @@ package com.vanmool.notificationservice.events;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -24,8 +25,20 @@ public final class Events {
                               Address shippingAddress) {
     }
 
+    // reason: CUSTOMER or PAYMENT_TIMEOUT
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record OrderCancelled(UUID eventId, UUID orderId, String customerEmail, BigDecimal totalAmount) {
+    public record OrderCancelled(UUID eventId, UUID orderId, String customerEmail, BigDecimal totalAmount, String reason) {
+    }
+
+    // payment-events, from payment-service
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PaymentSucceeded(UUID eventId, Instant occurredAt, UUID paymentId, UUID orderId, String customerEmail,
+                                   BigDecimal amount, String gateway, String gatewayPaymentId) {
+    }
+
+    // reason: FAILED or EXPIRED
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PaymentFailed(UUID eventId, UUID orderId, String customerEmail, BigDecimal amount, String reason) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

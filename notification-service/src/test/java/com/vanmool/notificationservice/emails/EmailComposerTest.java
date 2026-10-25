@@ -84,11 +84,43 @@ class EmailComposerTest {
     void cancellation_namesTheOrderAndItsAmount() {
         // Act
         Email email = composer.orderCancellation(new Events.OrderCancelled(UUID.randomUUID(), ORDER_ID,
-                "asha@example.com", new BigDecimal("999.98")));
+                "asha@example.com", new BigDecimal("999.98"), "CUSTOMER"));
 
         // Assert
         assertEquals("Your Vanmool order 7c9e6679 is cancelled", email.subject());
-        assertTrue(email.body().contains("Your order 7c9e6679-7425-40de-944b-e07fc1f90ae7 (₹999.98) has been cancelled"),
+        assertTrue(email.body().contains("Your order 7c9e6679-7425-40de-944b-e07fc1f90ae7 (₹999.98) has been cancelled."),
                 email.body());
+    }
+
+    @Test
+    void cancellationForAMissingPayment_saysSo() {
+        Email email = composer.orderCancellation(new Events.OrderCancelled(UUID.randomUUID(), ORDER_ID,
+                "asha@example.com", new BigDecimal("999.98"), "PAYMENT_TIMEOUT"));
+
+        assertTrue(email.body().contains("has been cancelled because its payment did not arrive in time"), email.body());
+    }
+
+    @Test
+    void receipt_showsTheAmountOrderTimeInIstGatewayAndReference() {
+        // 10:15 UTC is 3:45 PM in India
+        Email email = composer.paymentReceipt(new Events.PaymentSucceeded(UUID.randomUUID(),
+                java.time.Instant.parse("2026-10-26T10:15:00Z"), UUID.randomUUID(), ORDER_ID, "asha@example.com",
+                new BigDecimal("1359.98"), "RAZORPAY", "pay_Test456"));
+
+        assertEquals("Payment received for your Vanmool order 7c9e6679", email.subject());
+        assertTrue(email.body().contains("Amount paid       ₹1,359.98\n"), email.body());
+        assertTrue(email.body().contains("Paid on           26 Oct 2026, 3:45 PM IST\n"), email.body());
+        assertTrue(email.body().contains("Paid through      Razorpay\n"), email.body());
+        assertTrue(email.body().contains("Payment reference pay_Test456\n"), email.body());
+    }
+
+    @Test
+    void failedPayment_saysNoMoneyWasTaken_andHowToTryAgain() {
+        Email expired = composer.paymentFailed(new Events.PaymentFailed(UUID.randomUUID(), ORDER_ID, "asha@example.com",
+                new BigDecimal("999.98"), "EXPIRED"));
+
+        assertEquals("Your Vanmool payment did not go through", expired.subject());
+        assertTrue(expired.body().contains("The payment link for your order expired before it was paid"), expired.body());
+        assertTrue(expired.body().contains("No money was taken."), expired.body());
     }
 }

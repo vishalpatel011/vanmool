@@ -14,7 +14,7 @@ import org.springframework.util.backoff.FixedBackOff;
 
 // When an email cannot be sent (the SMTP server is down), the event is tried again every 2 s, 10 times; after that,
 // or at once for a message that can never work, it goes to this service's dead-letter topic for its source topic
-// (user-events.notification-service.DLT, order-events.notification-service.DLT), with the error in its headers.
+// (user-events.notification-service.DLT, order-events..., payment-events...), with the error in its headers.
 @Configuration
 public class KafkaConfig {
     static final String DLT_SUFFIX = ".notification-service.DLT";
@@ -27,6 +27,11 @@ public class KafkaConfig {
     @Bean
     public NewTopic orderEventsDeadLetterTopic() {
         return TopicBuilder.name("order-events" + DLT_SUFFIX).partitions(3).replicas(1).build();
+    }
+
+    @Bean
+    public NewTopic paymentEventsDeadLetterTopic() {
+        return TopicBuilder.name("payment-events" + DLT_SUFFIX).partitions(3).replicas(1).build();
     }
 
     // Boot gives this error handler to every @KafkaListener

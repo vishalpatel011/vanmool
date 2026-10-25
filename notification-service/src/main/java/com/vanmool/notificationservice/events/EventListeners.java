@@ -56,6 +56,30 @@ public class EventListeners {
         }
     }
 
+    @KafkaListener(topics = "payment-events")
+    public void onPaymentEvent(String message) throws JsonProcessingException {
+        JsonNode event = objectMapper.readTree(message);
+        switch (event.path("eventType").asText()) {
+            case "PaymentSucceeded" -> {
+                Events.PaymentSucceeded paid = read(event, Events.PaymentSucceeded.class);
+                if (paid.orderId() == null || paid.amount() == null) {
+                    throw new MalformedEventException("PaymentSucceeded event without its payment details: " + event);
+                }
+                notifier.sendOnce(paid.eventId(), emailComposer.paymentReceipt(paid));
+            }
+            case "PaymentFailed" -> {
+                Events.PaymentFailed failed = read(event, Events.PaymentFailed.class);
+                if (failed.orderId() == null || failed.amount() == null) {
+                    throw new MalformedEventException("PaymentFailed event without its payment details: " + event);
+                }
+                notifier.sendOnce(failed.eventId(), emailComposer.paymentFailed(failed));
+            }
+            default -> {
+                // not an event that needs an email
+            }
+        }
+    }
+
     // Every event needs its eventId: without it, a repeat could not be recognised
     private <T> T read(JsonNode event, Class<T> type) throws JsonProcessingException {
         if (!event.hasNonNull("eventId")) {

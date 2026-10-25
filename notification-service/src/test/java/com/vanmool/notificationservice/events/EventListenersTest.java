@@ -99,6 +99,27 @@ class EventListenersTest {
     }
 
     @Test
+    void paymentSucceeded_sendsTheReceipt_andPaymentFailed_sendsTheFailureEmail() throws Exception {
+        // Act
+        listeners.onPaymentEvent("""
+                { "eventId": "0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10", "eventType": "PaymentSucceeded",
+                  "occurredAt": "2026-10-26T10:15:00Z", "paymentId": "3b1f9a0e-5c2d-4e8f-9a7b-6c5d4e3f2a10",
+                  "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "userId": "a8c1e6ff-556d-4dd2-a238-148b3fca351c",
+                  "customerEmail": "asha@example.com", "amount": 999.98, "currency": "INR",
+                  "gateway": "STRIPE", "gatewayPaymentId": "pi_Test456" }""");
+        listeners.onPaymentEvent("""
+                { "eventId": "1c7f4d2f-9b1e-4a8f-8b62-4d3b7f9e0a21", "eventType": "PaymentFailed",
+                  "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "customerEmail": "asha@example.com",
+                  "amount": 999.98, "reason": "FAILED" }""");
+
+        // Assert
+        ArgumentCaptor<Email> emails = ArgumentCaptor.forClass(Email.class);
+        verify(emailSender, org.mockito.Mockito.times(2)).send(emails.capture());
+        assertEquals("Payment received for your Vanmool order 7c9e6679", emails.getAllValues().get(0).subject());
+        assertEquals("Your Vanmool payment did not go through", emails.getAllValues().get(1).subject());
+    }
+
+    @Test
     void anEventHandledBefore_sendsNoSecondEmail() throws Exception {
         // Arrange: Kafka delivered the same event again
         when(handledEvents.contains(EVENT_ID)).thenReturn(true);

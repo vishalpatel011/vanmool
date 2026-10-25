@@ -5,10 +5,16 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 // Writes the text of each email. Amounts are in Indian rupees with Indian digit grouping: ₹1,359.98, ₹1,00,000.00
 @Component
 public class EmailComposer {
+    // Times in Indian Standard Time: 26 Oct 2026, 3:45 PM IST
+    private static final DateTimeFormatter RECEIPT_TIME =
+            DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a 'IST'", Locale.ENGLISH);
     private static final String SIGNATURE = """
 
             Vanmool: crafts and foods from the villages of Gujarat""";
@@ -68,13 +74,57 @@ public class EmailComposer {
     }
 
     public Email orderCancellation(Events.OrderCancelled event) {
+        String why = "PAYMENT_TIMEOUT".equals(event.reason())
+                ? " because its payment did not arrive in time; the products are back on sale"
+                : "";
         String body = """
                 Hello,
 
-                Your order %s (%s) has been cancelled. Nothing will be charged for it.
-                """.formatted(event.orderId(), rupees(event.totalAmount())) + SIGNATURE;
+                Your order %s (%s) has been cancelled%s. Nothing will be charged for it.
+                """.formatted(event.orderId(), rupees(event.totalAmount()), why) + SIGNATURE;
         return new Email(event.customerEmail(), "Your Vanmool order " + event.orderId().toString().substring(0, 8)
                 + " is cancelled", body);
+    }
+
+    // The receipt (PRD 5.3): what was paid, for which order, how, and the gateway's reference for any question
+    public Email paymentReceipt(Events.PaymentSucceeded event) {
+        String paidAt = event.occurredAt() == null ? ""
+                : RECEIPT_TIME.format(event.occurredAt().atZone(ZoneId.of("Asia/Kolkata")));
+        String body = """
+                Hello,
+
+                We have received your payment. Your order is confirmed and will be prepared for dispatch.
+
+                Amount paid       %s
+                Order             %s
+                Paid on           %s
+                Paid through      %s
+                Payment reference %s
+                """.formatted(rupees(event.amount()), event.orderId(), paidAt, gatewayName(event.gateway()),
+                event.gatewayPaymentId()) + SIGNATURE;
+        return new Email(event.customerEmail(), "Payment received for your Vanmool order "
+                + event.orderId().toString().substring(0, 8), body);
+    }
+
+    public Email paymentFailed(Events.PaymentFailed event) {
+        String what = "EXPIRED".equals(event.reason()) ? "The payment link for your order expired before it was paid"
+                : "Your payment for your order did not go through";
+        String body = """
+                Hello,
+
+                %s (order %s, %s). No money was taken.
+                You can start the payment again from your order; the order is kept for one hour after it was placed.
+                """.formatted(what, event.orderId(), rupees(event.amount())) + SIGNATURE;
+        return new Email(event.customerEmail(), "Your Vanmool payment did not go through", body);
+    }
+
+    private static String gatewayName(String gateway) {
+        return switch (gateway == null ? "" : gateway) {
+            case "RAZORPAY" -> "Razorpay";
+            case "STRIPE" -> "Stripe";
+            case "FAKE" -> "Test gateway";
+            default -> gateway;
+        };
     }
 
     private static String shortId(Events.OrderPlaced event) {

@@ -10,17 +10,20 @@ import com.vanmool.orderservice.exceptions.InsufficientStockException;
 import com.vanmool.orderservice.exceptions.InvalidOrderStateException;
 import com.vanmool.orderservice.exceptions.OrderNotFoundException;
 import com.vanmool.orderservice.exceptions.ProductServiceUnavailableException;
+import com.vanmool.orderservice.events.OrderCancelledEvent;
+import com.vanmool.orderservice.events.OrderPlacedEvent;
+import com.vanmool.orderservice.events.OutboxWriter;
 import com.vanmool.orderservice.models.Order;
 import com.vanmool.orderservice.models.OrderStatus;
 import com.vanmool.orderservice.models.ShippingAddress;
 import com.vanmool.orderservice.repositories.OrderRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -29,8 +32,13 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -43,6 +51,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -56,6 +65,8 @@ class OrderServiceTest {
     private static final UUID BASKET_ID = UUID.fromString("150dac81-6130-4903-9385-9b682db879b3");
     private static final UUID BISCUITS_ID = UUID.fromString("837a0c5a-5181-4a65-8e10-32759b931990");
     private static final String TOKEN = "eyJ.customer.token";
+    private static final Customer CUSTOMER = new Customer(USER_ID, "asha@example.com", TOKEN);
+    private static final Instant NOW = Instant.parse("2026-10-25T10:00:00Z");
     private static final ShippingAddressDto ADDRESS = new ShippingAddressDto("Asha Gamit", "9876543210",
             "12 Station Road", "  ", "Ahwa", "Gujarat", "394710");
 
@@ -68,8 +79,17 @@ class OrderServiceTest {
     @Mock
     private ProductClient productClient;
 
-    @InjectMocks
+    @Mock
+    private OutboxWriter outboxWriter;
+
     private OrderService orderService;
+
+    // A real TransactionTemplate around a mocked transaction manager: the callback runs, no database is involved
+    @BeforeEach
+    void setUp() {
+        orderService = new OrderService(orderRepository, cartClient, productClient, outboxWriter,
+                new TransactionTemplate(mock(PlatformTransactionManager.class)), Clock.fixed(NOW, ZoneOffset.UTC));
+    }
 
     private static List<CartClient.CartLine> twoBasketsAndThreePackets() {
         return List.of(new CartClient.CartLine(BASKET_ID, 2), new CartClient.CartLine(BISCUITS_ID, 3));
@@ -113,7 +133,7 @@ class OrderServiceTest {
             saveReturnsItsArgument();
 
             // Act
-            OrderResponseDto order = orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null);
+            OrderResponseDto order = orderService.placeOrder(CUSTOMER, ADDRESS, null);
 
             // Assert: 2 x 499.99 + 3 x 120.00
             assertEquals(OrderStatus.PENDING_PAYMENT, order.status());
@@ -122,6 +142,29 @@ class OrderServiceTest {
                     order.items().stream().map(item -> item.lineTotal()).toList());
             assertEquals("Ragi Biscuits", order.items().get(1).name());
             verify(cartClient).clearCart(TOKEN);
+        }
+
+        @Test
+        void recordsOrderPlaced_withTheCustomersEmailItemsAndTotal_keyedByTheOrderId() {
+            // Arrange
+            when(cartClient.getCartLines(TOKEN)).thenReturn(twoBasketsAndThreePackets());
+            reservationSucceeds();
+            saveReturnsItsArgument();
+            ArgumentCaptor<OrderPlacedEvent> event = ArgumentCaptor.forClass(OrderPlacedEvent.class);
+
+            // Act
+            OrderResponseDto order = orderService.placeOrder(CUSTOMER, ADDRESS, null);
+
+            // Assert
+            verify(outboxWriter).add(eq("order-events"), eq(order.id().toString()), event.capture());
+            assertEquals("OrderPlaced", event.getValue().eventType());
+            assertEquals(order.id(), event.getValue().orderId());
+            assertEquals(USER_ID, event.getValue().userId());
+            assertEquals("asha@example.com", event.getValue().customerEmail());
+            assertEquals(new BigDecimal("1359.98"), event.getValue().totalAmount());
+            assertEquals(2, event.getValue().items().size());
+            assertEquals("394710", event.getValue().shippingAddress().pincode());
+            assertEquals(NOW, event.getValue().occurredAt());
         }
 
         @Test
@@ -134,7 +177,7 @@ class OrderServiceTest {
             ArgumentCaptor<UUID> reservedUnder = ArgumentCaptor.forClass(UUID.class);
 
             // Act
-            OrderResponseDto order = orderService.placeOrder(USER_ID, TOKEN, ADDRESS, "checkout-1");
+            OrderResponseDto order = orderService.placeOrder(CUSTOMER, ADDRESS, "checkout-1");
 
             // Assert
             verify(productClient).reserve(reservedUnder.capture(), any());
@@ -154,7 +197,7 @@ class OrderServiceTest {
             when(cartClient.getCartLines(TOKEN)).thenReturn(List.of());
 
             // Act & Assert
-            assertThrows(CartEmptyException.class, () -> orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null));
+            assertThrows(CartEmptyException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
             verifyNoInteractions(productClient);
             verify(orderRepository, never()).saveAndFlush(any());
         }
@@ -165,7 +208,7 @@ class OrderServiceTest {
             when(cartClient.getCartLines(TOKEN)).thenThrow(new CartServiceUnavailableException(new RuntimeException("down")));
 
             // Act & Assert
-            assertThrows(CartServiceUnavailableException.class, () -> orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null));
+            assertThrows(CartServiceUnavailableException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
             verifyNoInteractions(productClient);
         }
 
@@ -177,7 +220,7 @@ class OrderServiceTest {
                     .thenThrow(new InsufficientStockException("Not enough stock for products [" + BISCUITS_ID + "]"));
 
             // Act & Assert
-            assertThrows(InsufficientStockException.class, () -> orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null));
+            assertThrows(InsufficientStockException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
             verify(orderRepository, never()).saveAndFlush(any());
             verify(productClient, never()).release(any());
             verify(cartClient, never()).clearCart(any());
@@ -192,7 +235,7 @@ class OrderServiceTest {
                     .thenThrow(new ProductServiceUnavailableException(new RuntimeException("Read timed out")));
 
             // Act & Assert
-            assertThrows(ProductServiceUnavailableException.class, () -> orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null));
+            assertThrows(ProductServiceUnavailableException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
             verify(productClient).release(orderId.getValue());
             verify(orderRepository, never()).saveAndFlush(any());
         }
@@ -207,12 +250,13 @@ class OrderServiceTest {
                     .thenThrow(new DataAccessResourceFailureException("Communications link failure"));
 
             // Act
-            assertThrows(DataAccessResourceFailureException.class, () -> orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null));
+            assertThrows(DataAccessResourceFailureException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
 
-            // Assert: the units reserved under this order id are released, and the cart is kept
+            // Assert: the units reserved under this order id are released, the cart is kept, no event recorded
             verify(productClient).reserve(orderId.capture(), any());
             verify(productClient).release(orderId.getValue());
             verify(cartClient, never()).clearCart(any());
+            verifyNoInteractions(outboxWriter);
         }
 
         @Test
@@ -225,7 +269,7 @@ class OrderServiceTest {
             doThrow(new ProductServiceUnavailableException(new RuntimeException("down"))).when(productClient).release(any());
 
             // Act & Assert: the database error, not the release error, reaches the client
-            assertThrows(DataAccessResourceFailureException.class, () -> orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null));
+            assertThrows(DataAccessResourceFailureException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
         }
 
         @Test
@@ -237,7 +281,7 @@ class OrderServiceTest {
             doThrow(new CartServiceUnavailableException(new RuntimeException("down"))).when(cartClient).clearCart(TOKEN);
 
             // Act & Assert
-            assertEquals(OrderStatus.PENDING_PAYMENT, orderService.placeOrder(USER_ID, TOKEN, ADDRESS, null).status());
+            assertEquals(OrderStatus.PENDING_PAYMENT, orderService.placeOrder(CUSTOMER, ADDRESS, null).status());
             verify(productClient, never()).release(any());
         }
 
@@ -248,7 +292,7 @@ class OrderServiceTest {
             when(orderRepository.findByUserIdAndIdempotencyKey(USER_ID, "checkout-1")).thenReturn(Optional.of(first));
 
             // Act
-            OrderResponseDto order = orderService.placeOrder(USER_ID, TOKEN, ADDRESS, "checkout-1");
+            OrderResponseDto order = orderService.placeOrder(CUSTOMER, ADDRESS, "checkout-1");
 
             // Assert
             assertEquals(first.getId(), order.id());
@@ -268,7 +312,7 @@ class OrderServiceTest {
             ArgumentCaptor<UUID> secondOrderId = ArgumentCaptor.forClass(UUID.class);
 
             // Act
-            OrderResponseDto order = orderService.placeOrder(USER_ID, TOKEN, ADDRESS, "checkout-1");
+            OrderResponseDto order = orderService.placeOrder(CUSTOMER, ADDRESS, "checkout-1");
 
             // Assert
             assertEquals(first.getId(), order.id());
@@ -281,20 +325,25 @@ class OrderServiceTest {
     @DisplayName("cancelOrder")
     class CancelOrder {
         @Test
-        void pendingOrder_isMarkedCancelledFirst_thenItsStockIsReleased() {
+        void pendingOrder_isMarkedCancelled_andOrderCancelledIsRecorded_forProductServiceToReleaseTheStock() {
             // Arrange
             UUID orderId = UUID.randomUUID();
             when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(
                     Optional.of(order(orderId, OrderStatus.PENDING_PAYMENT)), Optional.of(order(orderId, OrderStatus.CANCELLED)));
             when(orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED)).thenReturn(1);
+            ArgumentCaptor<OrderCancelledEvent> event = ArgumentCaptor.forClass(OrderCancelledEvent.class);
 
             // Act
-            OrderResponseDto order = orderService.cancelOrder(USER_ID, orderId);
+            OrderResponseDto order = orderService.cancelOrder(CUSTOMER, orderId);
 
-            // Assert
-            InOrder steps = inOrder(orderRepository, productClient);
+            // Assert: the status change first, then the event, in one transaction; no direct call to product-service
+            InOrder steps = inOrder(orderRepository, outboxWriter);
             steps.verify(orderRepository).moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED);
-            steps.verify(productClient).release(orderId);
+            steps.verify(outboxWriter).add(eq("order-events"), eq(orderId.toString()), event.capture());
+            assertEquals("OrderCancelled", event.getValue().eventType());
+            assertEquals(orderId, event.getValue().orderId());
+            assertEquals("asha@example.com", event.getValue().customerEmail());
+            verifyNoInteractions(productClient);
             assertEquals(OrderStatus.CANCELLED, order.status());
         }
 
@@ -306,10 +355,10 @@ class OrderServiceTest {
 
             // Act & Assert
             InvalidOrderStateException exception = assertThrows(InvalidOrderStateException.class,
-                    () -> orderService.cancelOrder(USER_ID, orderId));
+                    () -> orderService.cancelOrder(CUSTOMER, orderId));
             assertEquals("An order that is CONFIRMED cannot be cancelled", exception.getMessage());
             verify(orderRepository, never()).moveStatus(any(), any(), any());
-            verifyNoInteractions(productClient);
+            verifyNoInteractions(productClient, outboxWriter);
         }
 
         @Test
@@ -319,37 +368,24 @@ class OrderServiceTest {
             when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(Optional.of(order(orderId, OrderStatus.PENDING_PAYMENT)));
             when(orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED)).thenReturn(0);
 
-            // Act & Assert
-            assertThrows(InvalidOrderStateException.class, () -> orderService.cancelOrder(USER_ID, orderId));
-            verifyNoInteractions(productClient);
+            // Act & Assert: and no event, since nothing was cancelled
+            assertThrows(InvalidOrderStateException.class, () -> orderService.cancelOrder(CUSTOMER, orderId));
+            verifyNoInteractions(productClient, outboxWriter);
         }
 
         @Test
-        void productServiceDown_stillCancelsTheOrder() {
-            // Arrange
-            UUID orderId = UUID.randomUUID();
-            when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(
-                    Optional.of(order(orderId, OrderStatus.PENDING_PAYMENT)), Optional.of(order(orderId, OrderStatus.CANCELLED)));
-            when(orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED)).thenReturn(1);
-            doThrow(new ProductServiceUnavailableException(new RuntimeException("down"))).when(productClient).release(orderId);
-
-            // Act & Assert: the customer's cancel succeeded; the units are released by the next cancel
-            assertEquals(OrderStatus.CANCELLED, orderService.cancelOrder(USER_ID, orderId).status());
-        }
-
-        @Test
-        void cancellingACancelledOrderAgain_releasesItsStockAgain_withoutAnotherStatusChange() {
+        void cancellingACancelledOrderAgain_changesNothing_andPublishesNothing() {
             // Arrange
             UUID orderId = UUID.randomUUID();
             when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(Optional.of(order(orderId, OrderStatus.CANCELLED)));
 
             // Act
-            OrderResponseDto order = orderService.cancelOrder(USER_ID, orderId);
+            OrderResponseDto order = orderService.cancelOrder(CUSTOMER, orderId);
 
-            // Assert: release is idempotent, so this completes a release that failed the first time
+            // Assert: the first cancel's event already releases the stock
             assertEquals(OrderStatus.CANCELLED, order.status());
             verify(orderRepository, never()).moveStatus(any(), any(), any());
-            verify(productClient).release(orderId);
+            verifyNoInteractions(productClient, outboxWriter);
         }
 
         @Test
@@ -359,7 +395,7 @@ class OrderServiceTest {
             when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(Optional.empty());
 
             // Act & Assert
-            assertThrows(OrderNotFoundException.class, () -> orderService.cancelOrder(USER_ID, orderId));
+            assertThrows(OrderNotFoundException.class, () -> orderService.cancelOrder(CUSTOMER, orderId));
             verifyNoInteractions(productClient);
         }
     }

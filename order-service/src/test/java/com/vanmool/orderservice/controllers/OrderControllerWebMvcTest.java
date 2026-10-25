@@ -13,6 +13,7 @@ import com.vanmool.orderservice.exceptions.ProductServiceUnavailableException;
 import com.vanmool.orderservice.exceptions.ProductUnavailableException;
 import com.vanmool.orderservice.models.OrderStatus;
 import com.vanmool.orderservice.security.RestSecurityErrorHandler;
+import com.vanmool.orderservice.services.Customer;
 import com.vanmool.orderservice.services.OrderService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -59,6 +60,7 @@ class OrderControllerWebMvcTest {
     private static final UUID USER_ID = UUID.fromString("a8c1e6ff-556d-4dd2-a238-148b3fca351c");
     private static final UUID ORDER_ID = UUID.fromString("7c9e6679-7425-40de-944b-e07fc1f90ae7");
     private static final UUID BASKET_ID = UUID.fromString("150dac81-6130-4903-9385-9b682db879b3");
+    private static final Customer CUSTOMER = new Customer(USER_ID, "asha@example.com", "eyJ.customer.token");
     private static final ShippingAddressDto ADDRESS = new ShippingAddressDto("Asha Gamit", "9876543210",
             "12 Station Road", null, "Ahwa", "Gujarat", "394710");
     private static final String VALID_REQUEST = """
@@ -80,7 +82,8 @@ class OrderControllerWebMvcTest {
     private OrderService orderService;
 
     private static RequestPostProcessor customerToken() {
-        return jwt().jwt(token -> token.subject(USER_ID.toString()).tokenValue("eyJ.customer.token"));
+        return jwt().jwt(token -> token.subject(USER_ID.toString()).claim("email", "asha@example.com")
+                .tokenValue("eyJ.customer.token"));
     }
 
     private static OrderResponseDto order(OrderStatus status) {
@@ -105,7 +108,8 @@ class OrderControllerWebMvcTest {
         @Test
         void validRequest_returns201WithTheOrderAndItsLocation() throws Exception {
             // Arrange
-            when(orderService.placeOrder(USER_ID, "eyJ.customer.token", ADDRESS, null)).thenReturn(order(OrderStatus.PENDING_PAYMENT));
+            // The customer passed on is the token's: subject, email claim and the token itself
+            when(orderService.placeOrder(CUSTOMER, ADDRESS, null)).thenReturn(order(OrderStatus.PENDING_PAYMENT));
 
             // Act & Assert: STRICT means no field may be missing or extra
             mockMvc.perform(post("/orders").with(customerToken()).contentType(MediaType.APPLICATION_JSON).content(VALID_REQUEST))
@@ -141,13 +145,13 @@ class OrderControllerWebMvcTest {
         @Test
         void idempotencyKey_isPassedToTheService() throws Exception {
             // Arrange
-            when(orderService.placeOrder(eq(USER_ID), any(), any(), eq("checkout-7f3a"))).thenReturn(order(OrderStatus.PENDING_PAYMENT));
+            when(orderService.placeOrder(any(), any(), eq("checkout-7f3a"))).thenReturn(order(OrderStatus.PENDING_PAYMENT));
 
             // Act & Assert
             mockMvc.perform(post("/orders").with(customerToken()).header("Idempotency-Key", "checkout-7f3a")
                             .contentType(MediaType.APPLICATION_JSON).content(VALID_REQUEST))
                     .andExpect(status().isCreated());
-            verify(orderService).placeOrder(eq(USER_ID), any(), any(), eq("checkout-7f3a"));
+            verify(orderService).placeOrder(eq(CUSTOMER), any(), eq("checkout-7f3a"));
         }
 
         @Test
@@ -202,7 +206,7 @@ class OrderControllerWebMvcTest {
                 case "CartServiceUnavailableException" -> new CartServiceUnavailableException(new RuntimeException("down"));
                 default -> new ProductServiceUnavailableException(new RuntimeException("down"));
             };
-            when(orderService.placeOrder(eq(USER_ID), any(), any(), isNull())).thenThrow(thrown);
+            when(orderService.placeOrder(any(), any(), isNull())).thenThrow(thrown);
 
             // Act & Assert
             mockMvc.perform(post("/orders").with(customerToken()).contentType(MediaType.APPLICATION_JSON).content(VALID_REQUEST))
@@ -276,7 +280,7 @@ class OrderControllerWebMvcTest {
         @Test
         void pendingOrder_returnsTheCancelledOrder() throws Exception {
             // Arrange
-            when(orderService.cancelOrder(USER_ID, ORDER_ID)).thenReturn(order(OrderStatus.CANCELLED));
+            when(orderService.cancelOrder(CUSTOMER, ORDER_ID)).thenReturn(order(OrderStatus.CANCELLED));
 
             // Act & Assert
             mockMvc.perform(post("/orders/{id}/cancel", ORDER_ID).with(customerToken()))
@@ -287,7 +291,7 @@ class OrderControllerWebMvcTest {
         @Test
         void orderThatCannotBeCancelled_returns409() throws Exception {
             // Arrange
-            when(orderService.cancelOrder(USER_ID, ORDER_ID))
+            when(orderService.cancelOrder(CUSTOMER, ORDER_ID))
                     .thenThrow(new InvalidOrderStateException("An order that is CONFIRMED cannot be cancelled"));
 
             // Act & Assert

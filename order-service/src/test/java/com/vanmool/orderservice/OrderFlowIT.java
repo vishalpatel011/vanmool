@@ -61,7 +61,8 @@ class OrderFlowIT {
     private ProductClient productClient;
 
     private RequestPostProcessor customer() {
-        return jwt().jwt(token -> token.subject(userId.toString()).tokenValue("eyJ.customer.token"));
+        return jwt().jwt(token -> token.subject(userId.toString()).claim("email", "asha@example.com")
+                .tokenValue("eyJ.customer.token"));
     }
 
     @BeforeEach
@@ -74,6 +75,7 @@ class OrderFlowIT {
 
     @AfterEach
     void removeOrders() {
+        jdbcTemplate.update("DELETE FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.userId') = ?", userId.toString());
         jdbcTemplate.update("DELETE i FROM order_item i JOIN orders o ON o.id = i.order_id WHERE o.user_id = UUID_TO_BIN(?)", userId.toString());
         jdbcTemplate.update("DELETE FROM orders WHERE user_id = UUID_TO_BIN(?)", userId.toString());
     }
@@ -110,15 +112,20 @@ class OrderFlowIT {
                 .andExpect(jsonPath("$.content", hasSize(1)))
                 .andExpect(jsonPath("$.content[0].items", hasSize(1)));
 
-        // Cancel: the stock is released, and a second cancel is harmless
+        // Cancel, twice: the second one changes nothing
         mockMvc.perform(post("/orders/{id}/cancel", orderId).with(customer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CANCELLED"));
         mockMvc.perform(post("/orders/{id}/cancel", orderId).with(customer()))
                 .andExpect(status().isOk());
-        verify(productClient, times(2)).release(UUID.fromString(orderId));
         assertEquals("CANCELLED", jdbcTemplate.queryForObject(
                 "SELECT status FROM orders WHERE id = UUID_TO_BIN(?)", String.class, orderId));
+
+        // The order's events were recorded once each, in the same transactions as the changes; the stock is released
+        // by product-service from OrderCancelled, not by a call from here
+        assertEquals(List.of("OrderPlaced", "OrderCancelled"), jdbcTemplate.queryForList(
+                "SELECT event_type FROM outbox_event WHERE message_key = ? ORDER BY created_at", String.class, orderId));
+        verify(productClient, times(0)).release(any());
     }
 
     @Test
@@ -127,8 +134,10 @@ class OrderFlowIT {
         String first = placeOrder("checkout-it-1");
         String second = placeOrder("checkout-it-1");
 
-        // Assert: one row, one reservation
+        // Assert: one row, one reservation, one OrderPlaced
         assertEquals(first, second);
+        assertEquals(1, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM outbox_event WHERE message_key = ?", Integer.class, first));
         assertEquals(1, jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM orders WHERE user_id = UUID_TO_BIN(?)", Integer.class, userId.toString()));
         verify(productClient, times(1)).reserve(any(UUID.class), any());
@@ -143,6 +152,7 @@ class OrderFlowIT {
         // Act & Assert
         mockMvc.perform(get("/orders/{id}", orderId).with(someoneElse)).andExpect(status().isNotFound());
         mockMvc.perform(post("/orders/{id}/cancel", orderId).with(someoneElse)).andExpect(status().isNotFound());
-        verify(productClient, times(0)).release(eq(UUID.fromString(orderId)));
+        assertEquals("PENDING_PAYMENT", jdbcTemplate.queryForObject(
+                "SELECT status FROM orders WHERE id = UUID_TO_BIN(?)", String.class, orderId));
     }
 }

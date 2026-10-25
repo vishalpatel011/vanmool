@@ -4,6 +4,7 @@ import com.vanmool.orderservice.dtos.OrderResponseDto;
 import com.vanmool.orderservice.dtos.PlaceOrderRequestDto;
 import com.vanmool.orderservice.exceptions.InvalidIdempotencyKeyException;
 import com.vanmool.orderservice.exceptions.NotAUserTokenException;
+import com.vanmool.orderservice.services.Customer;
 import com.vanmool.orderservice.services.OrderService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
@@ -49,8 +50,7 @@ public class OrderController {
         if (idempotencyKey != null && !IDEMPOTENCY_KEY.matcher(idempotencyKey).matches()) {
             throw new InvalidIdempotencyKeyException();
         }
-        OrderResponseDto order = orderService.placeOrder(userId(jwt), jwt.getTokenValue(), request.shippingAddress(),
-                idempotencyKey);
+        OrderResponseDto order = orderService.placeOrder(customer(jwt), request.shippingAddress(), idempotencyKey);
         URI location = uriComponentsBuilder.path("/orders/{id}").buildAndExpand(order.id()).toUri();
         return ResponseEntity.created(location).body(order);
     }
@@ -69,7 +69,12 @@ public class OrderController {
     // A state change, not a removal: the order stays in the history as CANCELLED, so POST rather than DELETE
     @PostMapping("/{id}/cancel")
     public OrderResponseDto cancelOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable("id") UUID orderId) {
-        return orderService.cancelOrder(userId(jwt), orderId);
+        return orderService.cancelOrder(customer(jwt), orderId);
+    }
+
+    // The token's user, with the email user-auth-service puts in its "email" claim
+    private static Customer customer(Jwt jwt) {
+        return new Customer(userId(jwt), jwt.getClaimAsString("email"), jwt.getTokenValue());
     }
 
     // user-auth-service puts the user's id in the token's subject ("sub")

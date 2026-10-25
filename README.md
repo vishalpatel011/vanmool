@@ -186,7 +186,7 @@ Each service reads its settings from the environment of its own process, so the 
 | `DB_USERNAME` | Database user | `ProductService_user` | `UserAuthService_user` | not used | `OrderService_user` |
 | `DB_PASSWORD` | Database password | empty | empty | not used | empty |
 | `SERVER_PORT` | HTTP port | `8080` | `8081` | `8082` | `8083` |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | not used | `localhost:9092` | not used | not used |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | `localhost:9092` | `localhost:9092` | not used | `localhost:9092` |
 | `REDIS_HOST`, `REDIS_PORT` | Redis server | `localhost`, `6379` | not used | `localhost`, `6379` | not used |
 | `REDIS_PASSWORD` | Redis password, if the server requires one | empty | not used | empty | not used |
 | `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used | not used | not used |
@@ -534,7 +534,7 @@ The order service (port 8083) turns the signed-in customer's cart into an order.
 
 1. The cart is read from the cart service, with the customer's own token. An empty cart is 409 `CART_EMPTY`.
 2. The stock is reserved in the product service under a new order id. It is all or nothing: if any product is short, nothing is reserved (409 `INSUFFICIENT_STOCK`); a product no longer sold is 409 `PRODUCT_UNAVAILABLE`. The reservation returns each product's current name and price, and the order is placed at exactly these prices. If the product service does not answer in time, the order id is released, in case the units were taken anyway.
-3. The order is saved in `order_db` as `PENDING_PAYMENT`. If that fails, the reservation is released again.
+3. The order is saved in `order_db` as `PENDING_PAYMENT`, together with its `OrderPlaced` event (see Events). If that fails, the reservation is released again.
 4. The cart is emptied. If that fails, the order still stands.
 
 **Idempotency-Key.** A client can send `Idempotency-Key: <a unique string>` (letters, digits, `-` and `_`, up to 100), for example a UUID it creates once per checkout. Sending the same request again, after a timeout or a double click, returns the order already placed instead of placing a second one; a unique key in the database also covers two requests arriving at the same moment.
@@ -547,7 +547,7 @@ PENDING_PAYMENT --(payment)--> CONFIRMED --> SHIPPED --> DELIVERED
        +--(cancel)--> CANCELLED
 ```
 
-Payment is not connected yet, so orders stay `PENDING_PAYMENT` until they are cancelled; `CONFIRMED`, `SHIPPED` and `DELIVERED` arrive with the payment service and producer tools. Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win, and then the reserved units go back to the stock. Cancelling a cancelled order again is allowed and releases the units again (releasing is idempotent), which completes a cancel during which the product service was unreachable.
+Payment is not connected yet, so orders stay `PENDING_PAYMENT` until they are cancelled; `CONFIRMED`, `SHIPPED` and `DELIVERED` arrive with the payment service and producer tools. Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win. The same transaction records an `OrderCancelled` event; the product service reads it and puts the reserved units back, retrying until it succeeds, so a product service that is down at that moment only delays the release. Cancelling a cancelled order again changes nothing.
 
 Errors use the same format as the other services. Codes: `INVALID_TOKEN` (401), `FORBIDDEN` (403), `ORDER_NOT_FOUND` (404), `CART_EMPTY`, `INSUFFICIENT_STOCK`, `PRODUCT_UNAVAILABLE` and `INVALID_ORDER_STATE` (409), `CART_SERVICE_UNAVAILABLE` and `PRODUCT_SERVICE_UNAVAILABLE` (503), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
 
@@ -558,6 +558,8 @@ Services tell each other what happened through Kafka, when the sender does not n
 | Topic | Owner (producer) | Event | Key | Consumers |
 |---|---|---|---|---|
 | `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
+| `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation); payment-service (planned) |
+| `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount` | order id | product-service (puts the stock back), notification-service |
 
 Every event is one JSON object with `eventId`, `eventType` and `occurredAt` first, then its own fields, for example:
 
@@ -568,7 +570,9 @@ Every event is one JSON object with `eventId`, `eventType` and `occurredAt` firs
 
 **Transactional outbox.** A service never sends an event straight to Kafka from its business code. It writes the event into its own `outbox_event` table in the same database transaction as the change (the new account), so both are saved or neither is. A relay sends unsent rows to Kafka every second, oldest first, waits for the broker to confirm each one (`acks=all`), and marks it sent. If Kafka is down, events wait in the table and go out when it is back; nothing is lost and no event is sent for a change that was rolled back. Sent rows are deleted after 7 days.
 
-Delivery is therefore *at least once*: an event can arrive twice (for example if the service stops right after Kafka accepted it), so consumers recognise repeats by `eventId`. Events with the same key go to the same partition and are read in order.
+Delivery is therefore *at least once*: an event can arrive twice (for example if the service stops right after Kafka accepted it), so every consumer must handle a repeat safely (releasing stock twice releases it once; the notification service remembers the `eventId`s it has handled). Events with the same key go to the same partition and are read in order: an order's `OrderCancelled` is never read before its `OrderPlaced`.
+
+**When a consumer fails.** Each consumer is a consumer group of its own (`product-service`, `notification-service`), so each reads every event. If handling an event fails, it is tried again every 2 seconds, 10 times, while later events of that partition wait. If it still fails, or if the message can never work (not JSON, missing fields; these are not retried), it is published to the consumer's own dead-letter topic, for example `order-events.product-service.DLT`, with the error in its headers, and the consumer carries on. Nothing is lost: dead-letter messages can be read and replayed once the cause is fixed.
 
 ```
 MSYS_NO_PATHCONV=1 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \

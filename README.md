@@ -270,6 +270,9 @@ The user-auth service (port 8081) owns user accounts. It never stores or returns
 | Method | Path | Success | Errors |
 |---|---|---|---|
 | POST | `/auth/signup` | 201, the new user | 400 invalid request body, 409 email already registered |
+| POST | `/auth/login` | 200, a bearer token and its expiry | 400 invalid request body, 401 email or password incorrect |
+| POST | `/auth/logout` | 204, the token stops working | 401 missing or malformed `Authorization` header |
+| GET | `/auth/validate` | 200, the token's user | 401 token missing, invalid, expired or revoked |
 
 Request body for `POST /auth/signup`:
 
@@ -289,7 +292,19 @@ Response, without the password:
 { "id": "5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10", "name": "Asha Gamit", "email": "asha@example.com", "roles": ["CUSTOMER"] }
 ```
 
-Every new account has the `CUSTOMER` role. Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`), with the code `EMAIL_ALREADY_REGISTERED` for a duplicate email.
+Every new account has the `CUSTOMER` role.
+
+`POST /auth/login` takes `{ "email": "...", "password": "..." }` and answers:
+
+```json
+{ "token": "5m9ew8_eJUU4RFqV69tOEITqm-Fa7SwkZi4ToZLFsZ0", "tokenType": "Bearer", "expiresAt": "2026-10-25T22:03:30Z" }
+```
+
+The client sends the token on later requests as `Authorization: Bearer <token>` (for `/auth/logout` and `/auth/validate`). Tokens are valid for 10 hours (`auth.token-validity`) unless the user logs out first. The service stores only a SHA-256 hash of each token, so a copy of its database cannot be used to log in.
+
+A wrong password and an unknown email get the same `401 INVALID_CREDENTIALS` answer, after the same BCrypt work, so the API does not reveal which emails have accounts.
+
+Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `VALIDATION_FAILED` and `MALFORMED_REQUEST` (400).
 
 ## Testing
 

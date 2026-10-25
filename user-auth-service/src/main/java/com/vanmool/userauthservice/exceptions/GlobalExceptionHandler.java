@@ -3,6 +3,7 @@ package com.vanmool.userauthservice.exceptions;
 import com.vanmool.userauthservice.dtos.ErrorDto;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -20,6 +21,20 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(EmailAlreadyRegisteredException.class)
     public ResponseEntity<ErrorDto> handleEmailAlreadyRegistered(EmailAlreadyRegisteredException e, HttpServletRequest request) {
         return buildError(HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<ErrorDto> handleInvalidCredentials(InvalidCredentialsException e, HttpServletRequest request) {
+        return buildError(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(InvalidTokenException.class)
+    public ResponseEntity<ErrorDto> handleInvalidToken(InvalidTokenException e, HttpServletRequest request) {
+        // RFC 6750: a 401 for a bearer token tells the client which authentication scheme to use
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+        ErrorDto errorDto = toErrorDto(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", e.getMessage(), request);
+        return new ResponseEntity<>(errorDto, headers, HttpStatus.UNAUTHORIZED);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

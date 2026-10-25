@@ -41,7 +41,8 @@ public class OutboxRelay {
                         .get(10, TimeUnit.SECONDS);
             } catch (Exception e) {
                 // Kafka is down or refused it: stop here and try again next round, so events keep their order
-                log.warn("Outbox event {} ({}) not sent yet: {}", event.getId(), event.getEventType(), e.getMessage());
+                // toString, not getMessage: a TimeoutException has no message, and its type is the useful part
+                log.warn("Outbox event {} ({}) not sent yet: {}", event.getId(), event.getEventType(), e.toString());
                 return;
             }
             event.setPublishedAt(clock.instant());

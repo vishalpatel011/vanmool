@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -25,6 +27,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     // No entity graph here: fetching a collection with a join cannot be paged in SQL (Hibernate would load every
     // order and page in memory). The items come from Order's @BatchSize: one more query for the whole page
     Page<Order> findByUserId(UUID userId, Pageable pageable);
+
+    // Unpaid orders past the payment window, oldest first, a batch at a time
+    List<Order> findTop100ByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(OrderStatus status, Instant before);
 
     // Moves the order to the next status only if it is still in the expected one, in one UPDATE: if the payment
     // service confirms the order at the moment the customer cancels it, exactly one of the two changes wins.

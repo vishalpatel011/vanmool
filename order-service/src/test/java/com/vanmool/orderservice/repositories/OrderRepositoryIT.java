@@ -129,6 +129,25 @@ class OrderRepositoryIT {
     }
 
     @Test
+    void unpaidOrdersBeforeACutoff_areFoundOldestFirst() throws Exception {
+        // Arrange: two pending orders, and one confirmed that must not be found
+        Order older = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        Thread.sleep(5);
+        Order newer = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        Order confirmed = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        orderRepository.moveStatus(confirmed.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED);
+        flushAndClear();
+
+        // Act
+        List<UUID> found = orderRepository.findTop100ByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
+                OrderStatus.PENDING_PAYMENT, java.time.Instant.now().plusSeconds(1)).stream()
+                .filter(order -> order.getUserId().equals(userId)).map(Order::getId).toList();
+
+        // Assert
+        assertEquals(List.of(older.getId(), newer.getId()), found);
+    }
+
+    @Test
     void moveStatus_movesOnlyFromTheExpectedStatus_andCountsTheVersionUp() {
         // Arrange
         Order order = orderRepository.saveAndFlush(newOrder(userId, null, 1));

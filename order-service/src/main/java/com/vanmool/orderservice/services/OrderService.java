@@ -16,6 +16,7 @@ import com.vanmool.orderservice.models.Order;
 import com.vanmool.orderservice.models.OrderStatus;
 import com.vanmool.orderservice.repositories.OrderRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -26,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,15 +51,18 @@ public class OrderService {
     private final OutboxWriter outboxWriter;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
+    private final Duration paymentWindow;
 
     public OrderService(OrderRepository orderRepository, CartClient cartClient, ProductClient productClient,
-                        OutboxWriter outboxWriter, TransactionTemplate transactionTemplate, Clock clock) {
+                        OutboxWriter outboxWriter, TransactionTemplate transactionTemplate, Clock clock,
+                        @Value("${order.payment-window}") Duration paymentWindow) {
         this.orderRepository = orderRepository;
         this.cartClient = cartClient;
         this.productClient = productClient;
         this.outboxWriter = outboxWriter;
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
+        this.paymentWindow = paymentWindow;
     }
 
     public OrderResponseDto placeOrder(Customer customer, ShippingAddressDto shippingAddress, String idempotencyKey) {
@@ -90,6 +96,7 @@ public class OrderService {
         order.setUserId(userId);
         order.setStatus(OrderStatus.PENDING_PAYMENT);
         order.setIdempotencyKey(idempotencyKey);
+        order.setCustomerEmail(customer.email());
         order.setShippingAddress(shippingAddress.toShippingAddress());
         reservation.items().forEach(item -> order.addItem(item.productId(), item.name(), item.unitPrice(), item.quantity()));
         order.setTotalAmount(order.calculateTotal());
@@ -156,10 +163,52 @@ public class OrderService {
             if (orderRepository.moveStatus(orderId, order.getStatus(), OrderStatus.CANCELLED) == 0) {
                 throw new InvalidOrderStateException("The order changed while it was being cancelled; check its status");
             }
-            outboxWriter.add(KafkaConfig.ORDER_EVENTS_TOPIC, orderId.toString(),
-                    OrderCancelledEvent.of(order, customer.email(), clock.instant()));
+            outboxWriter.add(KafkaConfig.ORDER_EVENTS_TOPIC, orderId.toString(), OrderCancelledEvent.of(order,
+                    order.getCustomerEmail() != null ? order.getCustomerEmail() : customer.email(),
+                    OrderCancelledEvent.BY_CUSTOMER, clock.instant()));
         });
         return OrderResponseDto.from(findOrder(customer.id(), orderId));
+    }
+
+    // PaymentSucceeded from payment-service: the order is paid. Kafka may deliver the event twice and the conditional
+    // UPDATE makes the second one change nothing
+    public void confirmPayment(UUID orderId, UUID paymentId) {
+        int moved = transactionTemplate.execute(status ->
+                orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED));
+        if (moved == 1) {
+            log.info("Order {} is CONFIRMED (payment {})", orderId, paymentId);
+            return;
+        }
+        Optional<Order> order = orderRepository.findById(orderId);
+        if (order.isEmpty()) {
+            log.warn("Payment {} is for an unknown order {}; ignored", paymentId, orderId);
+        } else if (order.get().getStatus() == OrderStatus.CANCELLED) {
+            // Paid in the moment between the cancellation and the payment link being closed: the money must go back
+            log.error("Order {} was CANCELLED but payment {} succeeded: refund needed (manual review)", orderId, paymentId);
+        }
+        // CONFIRMED or later: the same event again
+    }
+
+    // Orders not paid within the payment window are cancelled, so their stock goes back on sale. The window is longer
+    // than a payment link's validity, so a link that is still open always belongs to an order that is still open
+    public int expireUnpaidOrders() {
+        Instant cutoff = clock.instant().minus(paymentWindow);
+        int expired = 0;
+        for (Order order : orderRepository.findTop100ByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(OrderStatus.PENDING_PAYMENT, cutoff)) {
+            Boolean cancelled = transactionTemplate.execute(status -> {
+                if (orderRepository.moveStatus(order.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED) == 0) {
+                    return false;
+                }
+                outboxWriter.add(KafkaConfig.ORDER_EVENTS_TOPIC, order.getId().toString(), OrderCancelledEvent.of(order,
+                        order.getCustomerEmail(), OrderCancelledEvent.PAYMENT_TIMEOUT, clock.instant()));
+                return true;
+            });
+            if (Boolean.TRUE.equals(cancelled)) {
+                expired++;
+                log.info("Order {} was not paid within {}; cancelled", order.getId(), paymentWindow);
+            }
+        }
+        return expired;
     }
 
     private Order findOrder(UUID userId, UUID orderId) {

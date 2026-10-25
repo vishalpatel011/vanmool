@@ -88,7 +88,8 @@ class OrderServiceTest {
     @BeforeEach
     void setUp() {
         orderService = new OrderService(orderRepository, cartClient, productClient, outboxWriter,
-                new TransactionTemplate(mock(PlatformTransactionManager.class)), Clock.fixed(NOW, ZoneOffset.UTC));
+                new TransactionTemplate(mock(PlatformTransactionManager.class)), Clock.fixed(NOW, ZoneOffset.UTC),
+                java.time.Duration.ofMinutes(60));
     }
 
     private static List<CartClient.CartLine> twoBasketsAndThreePackets() {
@@ -185,6 +186,7 @@ class OrderServiceTest {
             assertEquals(order.id(), saved.getValue().getId());
             assertEquals(USER_ID, saved.getValue().getUserId());
             assertEquals("checkout-1", saved.getValue().getIdempotencyKey());
+            assertEquals("asha@example.com", saved.getValue().getCustomerEmail());
             // The blank second address line is stored as no line at all
             ShippingAddress address = saved.getValue().getShippingAddress();
             assertEquals("Ahwa", address.getCity());
@@ -341,6 +343,7 @@ class OrderServiceTest {
             steps.verify(orderRepository).moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED);
             steps.verify(outboxWriter).add(eq("order-events"), eq(orderId.toString()), event.capture());
             assertEquals("OrderCancelled", event.getValue().eventType());
+            assertEquals("CUSTOMER", event.getValue().reason());
             assertEquals(orderId, event.getValue().orderId());
             assertEquals("asha@example.com", event.getValue().customerEmail());
             verifyNoInteractions(productClient);
@@ -397,6 +400,58 @@ class OrderServiceTest {
             // Act & Assert
             assertThrows(OrderNotFoundException.class, () -> orderService.cancelOrder(CUSTOMER, orderId));
             verifyNoInteractions(productClient);
+        }
+    }
+
+    @Nested
+    @DisplayName("payments and expiry")
+    class Payments {
+        @Test
+        void paymentSucceeded_confirmsThePendingOrder() {
+            UUID orderId = UUID.randomUUID();
+            when(orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED)).thenReturn(1);
+
+            orderService.confirmPayment(orderId, UUID.randomUUID());
+
+            verify(orderRepository).moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED);
+            verify(orderRepository, never()).findById(any());
+        }
+
+        @Test
+        void sameEventAgain_orAPaymentForACancelledOrder_changesNothing() {
+            // A second delivery finds the order CONFIRMED; a late payment finds it CANCELLED (logged for a refund)
+            UUID confirmedId = UUID.randomUUID();
+            UUID cancelledId = UUID.randomUUID();
+            when(orderRepository.moveStatus(any(), eq(OrderStatus.PENDING_PAYMENT), eq(OrderStatus.CONFIRMED))).thenReturn(0);
+            when(orderRepository.findById(confirmedId)).thenReturn(Optional.of(order(confirmedId, OrderStatus.CONFIRMED)));
+            when(orderRepository.findById(cancelledId)).thenReturn(Optional.of(order(cancelledId, OrderStatus.CANCELLED)));
+
+            orderService.confirmPayment(confirmedId, UUID.randomUUID());
+            orderService.confirmPayment(cancelledId, UUID.randomUUID());
+
+            verifyNoInteractions(outboxWriter);
+        }
+
+        @Test
+        void unpaidOrdersPastTheWindow_areCancelledWithTheReason_andTheirStockIsReleasedThroughTheEvent() {
+            // Arrange: two unpaid orders older than 60 minutes; the second was paid just before the UPDATE
+            Order unpaid = order(UUID.randomUUID(), OrderStatus.PENDING_PAYMENT);
+            unpaid.setCustomerEmail("asha@example.com");
+            Order paidMeanwhile = order(UUID.randomUUID(), OrderStatus.PENDING_PAYMENT);
+            when(orderRepository.findTop100ByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(OrderStatus.PENDING_PAYMENT,
+                    NOW.minus(java.time.Duration.ofMinutes(60)))).thenReturn(List.of(unpaid, paidMeanwhile));
+            when(orderRepository.moveStatus(unpaid.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED)).thenReturn(1);
+            when(orderRepository.moveStatus(paidMeanwhile.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED)).thenReturn(0);
+            ArgumentCaptor<OrderCancelledEvent> event = ArgumentCaptor.forClass(OrderCancelledEvent.class);
+
+            // Act
+            int expired = orderService.expireUnpaidOrders();
+
+            // Assert: only the first is cancelled
+            assertEquals(1, expired);
+            verify(outboxWriter).add(eq("order-events"), eq(unpaid.getId().toString()), event.capture());
+            assertEquals("PAYMENT_TIMEOUT", event.getValue().reason());
+            assertEquals("asha@example.com", event.getValue().customerEmail());
         }
     }
 

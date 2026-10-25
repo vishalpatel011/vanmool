@@ -40,6 +40,7 @@ public class Order {
     private BigDecimal totalAmount;
     @Column(length = 100)
     private String idempotencyKey;
+    private String customerEmail;
     @Embedded
     private ShippingAddress shippingAddress;
     // The items belong to the order: saved and deleted with it (cascade), never shared.

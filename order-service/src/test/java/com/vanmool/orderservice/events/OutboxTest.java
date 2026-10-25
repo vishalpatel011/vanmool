@@ -67,7 +67,7 @@ class OutboxTest {
         OutboxWriter writer = new OutboxWriter(outboxEventRepository, objectMapper, CLOCK);
         UUID orderId = UUID.fromString("7c9e6679-7425-40de-944b-e07fc1f90ae7");
         OrderCancelledEvent event = new OrderCancelledEvent(UUID.randomUUID(), OrderCancelledEvent.TYPE, NOW, orderId,
-                USER_ID, "asha@example.com", new BigDecimal("999.98"));
+                USER_ID, "asha@example.com", new BigDecimal("999.98"), OrderCancelledEvent.BY_CUSTOMER);
         ArgumentCaptor<OutboxEvent> saved = ArgumentCaptor.forClass(OutboxEvent.class);
 
         // Act
@@ -84,7 +84,7 @@ class OutboxTest {
         assertEquals(objectMapper.readTree("""
                 { "eventId": "%s", "eventType": "OrderCancelled", "occurredAt": "2026-10-25T10:00:00Z",
                   "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "userId": "5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10",
-                  "customerEmail": "asha@example.com", "totalAmount": 999.98 }"""
+                  "customerEmail": "asha@example.com", "totalAmount": 999.98, "reason": "CUSTOMER" }"""
                 .formatted(event.eventId())), objectMapper.readTree(row.getPayload().toString()));
     }
 

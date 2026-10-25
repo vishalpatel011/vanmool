@@ -76,14 +76,13 @@ Target architecture (services are added one at a time; the table below shows wha
 | Spring Boot 3.5 (Web, Data JPA) | REST APIs and persistence | In use |
 | Hibernate / JPA | Object-relational mapping | In use |
 | MySQL 8 | Relational database | In use |
-| RestTemplate | Calls to third-party HTTP APIs | In use |
 | json-patch | JSON Patch support for `PATCH` requests | In use |
 | Lombok | Boilerplate reduction | In use |
 | Maven (wrapper included) | Build | In use |
 | Spring Security, JWT, BCrypt, OAuth2 | Authentication and authorization | Planned |
 | Redis | Product cache and cart storage | Planned |
 | Apache Kafka | Domain events between services | Planned |
-| Spring Cloud Gateway, Eureka | Routing and service discovery | Planned |
+| Spring Cloud Gateway, Eureka, RestTemplate | Routing, service discovery and calls between services | Planned |
 | Razorpay, Stripe | Payments | Planned |
 | Docker | Containers and local infrastructure | Planned |
 | AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
@@ -101,12 +100,11 @@ vanmool/
     └── src/
         ├── main/java/com/vanmool/productservice/
         │   ├── controllers/    REST endpoints
-        │   ├── services/       business logic (ProductService and its implementations)
+        │   ├── services/       business logic (ProductService and its database implementation)
         │   ├── repositories/   Spring Data JPA repositories
         │   ├── models/         JPA entities
         │   ├── dtos/           request and response objects
-        │   ├── exceptions/     custom exceptions and the global exception handler
-        │   └── configs/        Spring configuration
+        │   └── exceptions/     custom exceptions and the global exception handler
         └── test/
 ```
 
@@ -202,8 +200,6 @@ Errors are returned as:
 { "message": "Product with id 999 not found", "status": "Failure" }
 ```
 
-The service has two implementations of the `ProductService` interface: `ProductDbService`, backed by MySQL and used by the API, and `FakeStoreProductService`, backed by the public FakeStore API through `RestTemplate`, which shows how a third-party API is integrated behind the same interface.
-
 ## Testing
 
 The product service currently has one Spring Boot test that starts the full application context, so it needs a running MySQL. Unit tests for the service layer and MockMvc controller tests with JSON assertions are the next part of the roadmap.
@@ -212,7 +208,7 @@ The product service currently has one Spring Boot test that starts the full appl
 
 - [x] REST API for products with correct HTTP methods and status codes
 - [x] Centralized exception handling with `@RestControllerAdvice`
-- [x] Third-party API integration with `RestTemplate`
+- [x] Third-party API integration with `RestTemplate`: the first version of the service read and wrote products through the public FakeStore API, behind the same `ProductService` interface, before the database implementation replaced it
 - [x] Persistence with Spring Data JPA, Hibernate and MySQL
 - [x] Database settings read from environment variables
 - [ ] UUID identifiers and database migrations

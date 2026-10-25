@@ -8,7 +8,6 @@ import com.vanmool.productservice.services.ProductService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -20,7 +19,7 @@ import java.util.List;
 public class ProductController {
     private final ProductService productService;
 
-    public ProductController(@Qualifier("productDbService") ProductService productService) {
+    public ProductController(ProductService productService) {
         this.productService = productService;
     }
 

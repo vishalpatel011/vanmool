@@ -12,6 +12,8 @@ import java.math.BigDecimal;
 @Setter
 @Entity
 public class Product extends Base{
+    // Long enough for how and where a product is made, not just a one-line summary
+    @Column(length = 2000)
     private String description;
     private String imageUrl;
     @ManyToOne

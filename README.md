@@ -199,7 +199,8 @@ Request bodies are validated before anything is saved:
 |---|---|
 | `name` | required, not blank, at most 255 characters |
 | `price` | required, greater than 0, at most 8 digits before and 2 after the decimal point |
-| `description`, `imageUrl`, `category` | optional, at most 255 characters each |
+| `description` | optional, at most 2000 characters |
+| `imageUrl`, `category` | optional, at most 255 characters each |
 
 A request that breaks a rule gets 400 with every failing field, for example:
 

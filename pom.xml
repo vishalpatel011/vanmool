@@ -18,5 +18,6 @@
         <module>cart-service</module>
         <module>order-service</module>
         <module>notification-service</module>
+        <module>payment-service</module>
     </modules>
 </project>

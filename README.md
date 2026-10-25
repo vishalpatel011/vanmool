@@ -63,7 +63,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | `inventory-service` | Stock levels, reservation and release | MySQL | Inside `product-service` for now (own tables and endpoints) |
 | `cart-service` | Shopping carts of signed-in users, priced with current product prices | Redis | In progress |
 | `order-service` | Checkout from the cart, order history, the order lifecycle and cancellation | MySQL (`order_db`) | In progress |
-| `payment-service` | Payments, webhooks and reconciliation (Razorpay, Stripe) | MySQL | Planned |
+| `payment-service` | Payment links (Razorpay, Stripe), webhooks, callbacks, reconciliation | MySQL (`payment_db`) | In progress |
 | `notification-service` | Emails for events on Kafka: welcome, order placed, order cancelled | Redis (handled event ids) | In progress |
 | `api-gateway` | Single entry point and request routing | | Planned |
 | `service-discovery` | Eureka service registry | | Planned |
@@ -93,7 +93,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | Spring Mail (Jakarta Mail) | Sending email over SMTP | In use |
 | RestClient | Calls between services (cart to product), with timeouts | In use |
 | Spring Cloud Gateway, Eureka | Routing and service discovery | Planned |
-| Razorpay, Stripe | Payments | Planned |
+| Razorpay Java SDK 1.4, Stripe Java SDK 34 | Payment links, webhook and callback signature checks | Implemented in test mode, verified with the SDKs' own signature checks (no live gateway accounts are used) |
 | Docker Compose | Local infrastructure (Redis, Kafka, Mailpit) | In use |
 | Docker | Containers for the services | Planned |
 | AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
@@ -111,6 +111,7 @@ vanmool/
 ├── cart-service/       shopping carts in Redis (same layout; clients/ holds the call to product-service)
 ├── order-service/      orders (same layout; clients/ holds the calls to cart-service and product-service)
 ├── notification-service/  emails from Kafka events (events/ listeners, emails/ composing and sending; no HTTP API)
+├── payment-service/    payments (gateways/ holds Razorpay, Stripe and the fake gateway behind one interface)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
@@ -158,6 +159,10 @@ GRANT ALL PRIVILEGES ON user_db.* TO 'vanmool_auth_user'@'localhost';
 CREATE DATABASE order_db;
 CREATE USER 'vanmool_order_user'@'localhost' IDENTIFIED BY 'choose-a-third-password';
 GRANT ALL PRIVILEGES ON order_db.* TO 'vanmool_order_user'@'localhost';
+
+CREATE DATABASE payment_db;
+CREATE USER 'vanmool_payment_user'@'localhost' IDENTIFIED BY 'choose-a-fourth-password';
+GRANT ALL PRIVILEGES ON payment_db.* TO 'vanmool_payment_user'@'localhost';
 ```
 
 The tables are created by Flyway, not by hand and not by Hibernate. On startup Flyway applies every script in the service's `src/main/resources/db/migration` that the database has not seen yet, and records it in the `flyway_schema_history` table. Hibernate then only checks that the tables match the entities (`spring.jpa.hibernate.ddl-auto=validate`) and stops the application if they do not.
@@ -215,10 +220,10 @@ To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user
 
 ### 5. Run
 
-- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication` or `NotificationServiceApplication`.
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`, `NotificationServiceApplication` or `PaymentServiceApplication`.
 - **Command line:** `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`)
 
-The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082` and the order service on `http://localhost:8083`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082`, the order service on `http://localhost:8083` and the payment service on `http://localhost:8085`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
 
 ## Product Service API
 
@@ -549,9 +554,61 @@ PENDING_PAYMENT --(payment)--> CONFIRMED --> SHIPPED --> DELIVERED
        +--(cancel)--> CANCELLED
 ```
 
-Payment is not connected yet, so orders stay `PENDING_PAYMENT` until they are cancelled; `CONFIRMED`, `SHIPPED` and `DELIVERED` arrive with the payment service and producer tools. Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win. The same transaction records an `OrderCancelled` event; the product service reads it and puts the reserved units back, retrying until it succeeds, so a product service that is down at that moment only delays the release. Cancelling a cancelled order again changes nothing.
+The payment service's `PaymentSucceeded` event moves the order to `CONFIRMED` (see Payment Service API); a payment that arrives for an order that was cancelled in the meantime is logged as needing a refund. An order that is not paid within 60 minutes (`ORDER_PAYMENT_WINDOW`) is cancelled automatically and its stock goes back on sale. `SHIPPED` and `DELIVERED` arrive with the producer tools. Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win. The same transaction records an `OrderCancelled` event; the product service reads it and puts the reserved units back, retrying until it succeeds, so a product service that is down at that moment only delays the release. Cancelling a cancelled order again changes nothing.
 
 Errors use the same format as the other services. Codes: `INVALID_TOKEN` (401), `FORBIDDEN` (403), `ORDER_NOT_FOUND` (404), `CART_EMPTY`, `INSUFFICIENT_STOCK`, `PRODUCT_UNAVAILABLE` and `INVALID_ORDER_STATE` (409), `CART_SERVICE_UNAVAILABLE` and `PRODUCT_SERVICE_UNAVAILABLE` (503), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
+
+## Payment Service API
+
+The payment service (port 8085) takes payments for orders through a payment gateway. The customer starts a payment for one of their orders, pays on the gateway's page, and the order is confirmed when the gateway confirms the money.
+
+| Method | Path | Auth | Success | Errors |
+|---|---|---|---|---|
+| POST | `/payments` | customer token | 201 a new payment link (200 if the order already has an open one) | 400, 401, 404 order not found, 409 order not payable, 503 |
+| GET | `/payments/{id}` | customer token | 200 the payment and its history | 401, 404 |
+| POST | `/payments/reconciliation` | `ADMIN` token | 200 a report: checked, changed, mismatches | 401, 403 |
+| POST | `/payments/webhooks/{razorpay\|stripe}` | gateway signature | 200 | 400 invalid signature |
+| GET | `/payments/callback/{razorpay\|stripe}` | none (checked with the gateway) | 200 the payment | 400, 404 |
+
+`POST /payments` takes `{ "orderId": "...", "gateway": "RAZORPAY" }` (`gateway` optional: `RAZORPAY` for UPI, cards and net banking, `STRIPE` for international cards). It never takes an amount: the payment service asks the order service for the order with the customer's own token, so a customer can only pay their own order, and only what it costs. The answer holds `paymentUrl`, the gateway page where the customer pays, valid for 30 minutes.
+
+**Gateways.** Each gateway is one implementation of a `PaymentGateway` interface (the strategy pattern), so gateway-specific code stays in its own class:
+
+- **Razorpay:** a Payment Link per payment, with the payment's id as `reference_id`, which Razorpay accepts only once.
+- **Stripe:** a Checkout Session per payment, created with the payment's id as Stripe's `Idempotency-Key`.
+- **Fake gateway:** for development and tests (`PAYMENT_FAKE_GATEWAY_ENABLED=true`, never in a deployment). Its checkout page at `/fake-gateway/checkout/...` lets you pay or fail a payment without an account, and it sends a signed webhook like the real ones.
+
+If the chosen (or default) gateway cannot create a link, the next enabled gateway is tried. A gateway is enabled when its keys are set; only test mode keys belong in development.
+
+**One open payment per order.** Asking again for an order returns its open link, so a double click never gives two links to pay. A unique database index on open payments enforces it even for requests at the same moment.
+
+**How a payment is confirmed.** There are three paths, and all of them change a payment at most once (a conditional `UPDATE` from `CREATED`):
+
+1. **Webhook** (the reliable one): the gateway calls `/payments/webhooks/...` server to server. The signature is checked (Razorpay: HMAC-SHA256 of the body; Stripe: HMAC-SHA256 of timestamp and body, which also refuses old replayed events). Each gateway event id is stored, so a second delivery changes nothing.
+2. **Callback**: the gateway sends the customer's browser back to `/payments/callback/...`. Its URL parameters can be changed by anyone, so they are only used to find the payment; the result is asked from the gateway.
+3. **Reconciliation**: every 5 minutes, open payments older than 2 minutes are checked with their gateway (a webhook can be lost, a browser closed), and the last day's finished payments are compared with the gateway's records. The gateway is the source of truth; a disagreement, such as money taken for a payment recorded as expired, is recorded and logged for manual review instead of being changed automatically.
+
+A paid amount that differs from the order's amount is not accepted either; it is recorded for review.
+
+**History.** Every change of a payment's status is appended to `payment_status_change`, with where it came from (`API`, `WEBHOOK`, `CALLBACK`, `RECONCILIATION`, `ORDER_EVENT`), and never updated. `GET /payments/{id}` shows it.
+
+**Events.** A finished payment publishes `PaymentSucceeded` or `PaymentFailed` on `payment-events` through the outbox (see Events). When an order is cancelled, the payment service closes its open payment link at the gateway, so a cancelled order cannot be paid; if the link was paid at that very moment, the payment is recorded and the order service reports the refund that is needed.
+
+**Webhooks locally.** A gateway cannot reach `localhost`. Callbacks and reconciliation work without it; for webhooks, the service needs a public address, from a tunnel such as `cloudflared` or `ngrok`, or the deployment's URL (`PAYMENT_PUBLIC_BASE_URL`).
+
+Errors use the same format as the other services. Codes: `ORDER_NOT_FOUND`, `PAYMENT_NOT_FOUND` (404), `ORDER_NOT_PAYABLE`, `PAYMENT_IN_PROGRESS` (409), `INVALID_SIGNATURE`, `GATEWAY_NOT_AVAILABLE`, `VALIDATION_FAILED`, `MALFORMED_REQUEST` (400), `INVALID_TOKEN` (401), `FORBIDDEN` (403), `PAYMENT_GATEWAY_UNAVAILABLE`, `ORDER_SERVICE_UNAVAILABLE` (503).
+
+| Variable | Description | Default |
+|---|---|---|
+| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | The payment database | `jdbc:mysql://localhost:3306/payment_db`, `PaymentService_user`, empty |
+| `ORDER_SERVICE_URL` | Base URL of order-service | `http://localhost:8083` |
+| `AUTH_ISSUER`, `AUTH_JWKS_URI` | Token issuer and public keys, as in the cart service | `http://localhost:8081`, `.../oauth2/jwks` |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | `localhost:9092` |
+| `PAYMENT_PUBLIC_BASE_URL` | Public address for gateway callbacks and webhooks | `http://localhost:8085` |
+| `PAYMENT_DEFAULT_GATEWAY` | Gateway used when the customer does not choose | `RAZORPAY` |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Razorpay test mode keys | empty (Razorpay off) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe test mode keys | empty (Stripe off) |
+| `PAYMENT_FAKE_GATEWAY_ENABLED` | Turns the fake gateway on, for development only | `false` |
 
 ## Events (Kafka)
 
@@ -560,8 +617,10 @@ Services tell each other what happened through Kafka, when the sender does not n
 | Topic | Owner (producer) | Event | Key | Consumers |
 |---|---|---|---|---|
 | `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
-| `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation); payment-service (planned) |
-| `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount` | order id | product-service (puts the stock back), notification-service |
+| `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation) |
+| `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount`, `reason` (`CUSTOMER` or `PAYMENT_TIMEOUT`) | order id | product-service (puts the stock back), payment-service (closes the open payment link), notification-service |
+| `payment-events` | payment-service | `PaymentSucceeded`: `paymentId`, `orderId`, `userId`, `customerEmail`, `amount`, `currency`, `gateway`, `gatewayPaymentId` | order id | order-service (confirms the order), notification-service (receipt) |
+| `payment-events` | payment-service | `PaymentFailed`: `paymentId`, `orderId`, `customerEmail`, `amount`, `reason` (`FAILED` or `EXPIRED`) | order id | notification-service |
 
 Every event is one JSON object with `eventId`, `eventType` and `occurredAt` first, then its own fields, for example:
 
@@ -591,7 +650,9 @@ The notification service has no API. It reads `user-events` and `order-events` f
 |---|---|
 | `UserRegistered` | "Welcome to Vanmool", to the new account's address |
 | `OrderPlaced` | "Your Vanmool order 7c9e6679 is placed": each product with its quantity and line total, the total in rupees (₹1,359.98), and the delivery address |
-| `OrderCancelled` | "Your Vanmool order 7c9e6679 is cancelled" |
+| `OrderCancelled` | "Your Vanmool order 7c9e6679 is cancelled", saying so when the payment did not arrive in time |
+| `PaymentSucceeded` | "Payment received for your Vanmool order 7c9e6679": amount, order, time (IST), gateway and the gateway's payment reference |
+| `PaymentFailed` | "Your Vanmool payment did not go through": no money taken, and how to try again |
 
 - **Each email once.** Kafka can deliver an event twice. The service records the id of every event whose email went out in Redis (`notification:event:{eventId}`, kept 7 days) and skips an event it has seen. The record is written after the email was sent: if the mail server fails, nothing is recorded and the event is tried again. If Redis itself is unreachable, the email is sent anyway (one email too many is better than none).
 - **Failures.** An email that cannot be sent is tried again every 2 seconds, 10 times, then the event is published to `user-events.notification-service.DLT` or `order-events.notification-service.DLT`. A message that is not a valid event goes there at once.
@@ -644,7 +705,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Redis: cart storage
 - [x] Product search, pagination, sorting and filtering
 - [x] Kafka domain events through a transactional outbox: `UserRegistered`
-- [ ] Payment Service: Razorpay and Stripe, webhooks, reconciliation
+- [x] Payment Service: Razorpay and Stripe (test mode), signed webhooks, callbacks, reconciliation, one open payment per order, unpaid orders cancelled after an hour
 - [x] Cart service: carts in Redis, current prices from the product service, JWTs checked with the user-auth service's public keys
 - [x] Order service: checkout from the cart with stock reservations, Idempotency-Key, order history, cancellation
 - [x] Stock and stock reservations (inside the product service)

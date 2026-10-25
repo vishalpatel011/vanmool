@@ -104,11 +104,9 @@ class OutboxTest {
         // Assert
         InOrder order = inOrder(kafkaTemplate, outboxEventRepository);
         order.verify(kafkaTemplate).send("order-events", USER_ID.toString(), "{\"eventType\":\"OrderPlaced\"}");
-        order.verify(outboxEventRepository).save(first);
+        order.verify(outboxEventRepository).markPublished(first.getId(), NOW);
         order.verify(kafkaTemplate).send("order-events", USER_ID.toString(), "{\"eventType\":\"OrderPlaced\"}");
-        order.verify(outboxEventRepository).save(second);
-        assertEquals(NOW, first.getPublishedAt());
-        assertEquals(NOW, second.getPublishedAt());
+        order.verify(outboxEventRepository).markPublished(second.getId(), NOW);
     }
 
     @Test
@@ -126,9 +124,7 @@ class OutboxTest {
 
         // Assert: one attempt, nothing marked, so the order of events is kept
         verify(kafkaTemplate).send(anyString(), anyString(), anyString());
-        verify(outboxEventRepository, never()).save(any());
-        assertNull(first.getPublishedAt());
-        assertNull(second.getPublishedAt());
+        verify(outboxEventRepository, never()).markPublished(any(), any());
     }
 
     @Test

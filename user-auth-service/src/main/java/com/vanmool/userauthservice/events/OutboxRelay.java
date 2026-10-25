@@ -45,8 +45,7 @@ public class OutboxRelay {
                 log.warn("Outbox event {} ({}) not sent yet: {}", event.getId(), event.getEventType(), e.toString());
                 return;
             }
-            event.setPublishedAt(clock.instant());
-            outboxEventRepository.save(event);
+            outboxEventRepository.markPublished(event.getId(), clock.instant());
         }
     }
 

@@ -15,6 +15,13 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     // The next events to send, oldest first, at most 100 per round
     List<OutboxEvent> findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
 
+    // One UPDATE by id. Saving the loaded entity instead would merge it, which first SELECTs the row and, if the row
+    // has been deleted in the meantime, INSERTs it again
+    @Transactional
+    @Modifying
+    @Query("UPDATE OutboxEvent e SET e.publishedAt = :publishedAt WHERE e.id = :id")
+    int markPublished(@Param("id") UUID id, @Param("publishedAt") Instant publishedAt);
+
     // Housekeeping: sent events are kept for a while (to look at), then removed
     @Transactional
     @Modifying

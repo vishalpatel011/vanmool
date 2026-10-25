@@ -3,9 +3,11 @@ package com.vanmool.productservice.controllers;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
 import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.services.ProductSearchCriteria;
 import com.vanmool.productservice.services.ProductService;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validation;
@@ -18,6 +20,11 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.json.JsonCompareMode;
@@ -25,6 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -99,51 +107,106 @@ class ProductControllerWebMvcTest {
 
     @Nested
     @DisplayName("GET /products")
-    class GetAllProducts {
+    class GetProducts {
         @Test
-        void returnsEveryProductAsAJsonArray() throws Exception {
+        void returnsAPageOfProductsWithItsPageInformation() throws Exception {
             // Arrange
             UUID ragiId = UUID.fromString("837a0c5a-5181-4a65-8e10-32759b931990");
-            when(productService.getAllProducts()).thenReturn(List.of(
-                    bambooBasket(),
-                    product(ragiId, "Ragi Biscuits", "120.00", "Natural Foods")));
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class))).thenReturn(new PageImpl<>(
+                    List.of(bambooBasket(), product(ragiId, "Ragi Biscuits", "120.00", "Natural Foods")), PageRequest.of(0, 20), 2));
 
             // Act & Assert
             mockMvc.perform(get("/products"))
                     .andExpect(status().isOk())
                     .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                    .andExpect(jsonPath("$", hasSize(2)))
-                    .andExpect(jsonPath("$[0].id").value(PRODUCT_ID.toString()))
-                    .andExpect(jsonPath("$[0].name").value("Handcrafted Bamboo Basket"))
-                    .andExpect(jsonPath("$[0].price").value(499.99))
-                    .andExpect(jsonPath("$[0].category").value("Traditional Crafts"))
-                    .andExpect(jsonPath("$[1].id").value(ragiId.toString()))
-                    .andExpect(jsonPath("$[1].category").value("Natural Foods"));
+                    .andExpect(jsonPath("$.content", hasSize(2)))
+                    .andExpect(jsonPath("$.content[0].id").value(PRODUCT_ID.toString()))
+                    .andExpect(jsonPath("$.content[0].price").value(499.99))
+                    .andExpect(jsonPath("$.content[0].originRegion").value("Dangs, Gujarat"))
+                    .andExpect(jsonPath("$.content[1].category").value("Natural Foods"))
+                    .andExpect(jsonPath("$.page.number").value(0))
+                    .andExpect(jsonPath("$.page.size").value(20))
+                    .andExpect(jsonPath("$.page.totalElements").value(2))
+                    .andExpect(jsonPath("$.page.totalPages").value(1));
         }
 
         @Test
-        void withCategoryParameter_returnsOnlyThatCategory() throws Exception {
+        void withoutParameters_asksForTheFirst20ProductsNewestFirst() throws Exception {
             // Arrange
-            when(productService.getProductsByCategory("Natural Foods")).thenReturn(List.of(
-                    product(UUID.randomUUID(), "Ragi Biscuits", "120.00", "Natural Foods")));
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class)))
+                    .thenReturn(Page.empty(PageRequest.of(0, 20)));
 
-            // Act & Assert: the space in the parameter is URL-encoded on the wire, as a browser would send it
-            mockMvc.perform(get("/products").param("category", "Natural Foods"))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$", hasSize(1)))
-                    .andExpect(jsonPath("$[0].name").value("Ragi Biscuits"));
-            verify(productService, never()).getAllProducts();
-        }
-
-        @Test
-        void whenNoProductsExist_returnsAnEmptyArray() throws Exception {
-            // Arrange
-            when(productService.getAllProducts()).thenReturn(List.of());
-
-            // Act & Assert
+            // Act & Assert: STRICT, so the page format a client relies on cannot change unnoticed
             mockMvc.perform(get("/products"))
                     .andExpect(status().isOk())
-                    .andExpect(content().json("[]", JsonCompareMode.STRICT));
+                    .andExpect(content().json("""
+                            { "content": [], "page": { "size": 20, "number": 0, "totalElements": 0, "totalPages": 0 } }""",
+                            JsonCompareMode.STRICT));
+            ArgumentCaptor<ProductSearchCriteria> criteria = ArgumentCaptor.forClass(ProductSearchCriteria.class);
+            ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+            verify(productService).searchProducts(criteria.capture(), pageable.capture());
+            assertEquals(new ProductSearchCriteria(null, null, null, null, null), criteria.getValue());
+            assertEquals(PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt")), pageable.getValue());
+        }
+
+        @Test
+        void filtersPagingAndSort_reachTheServiceAsSent() throws Exception {
+            // Arrange
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class)))
+                    .thenReturn(Page.empty(PageRequest.of(2, 5)));
+
+            // Act
+            mockMvc.perform(get("/products")
+                            .param("q", "bamboo").param("category", "Traditional Crafts").param("origin", "Dangs")
+                            .param("minPrice", "100").param("maxPrice", "600.50")
+                            .param("page", "2").param("size", "5").param("sort", "price,asc"))
+                    .andExpect(status().isOk());
+
+            // Assert
+            ArgumentCaptor<ProductSearchCriteria> criteria = ArgumentCaptor.forClass(ProductSearchCriteria.class);
+            ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+            verify(productService).searchProducts(criteria.capture(), pageable.capture());
+            assertEquals(new ProductSearchCriteria("bamboo", "Traditional Crafts", "Dangs",
+                    new BigDecimal("100"), new BigDecimal("600.50")), criteria.getValue());
+            assertEquals(PageRequest.of(2, 5, Sort.by(Sort.Direction.ASC, "price")), pageable.getValue());
+        }
+
+        @Test
+        void pageSizeAbove100_isCappedAt100() throws Exception {
+            // Arrange
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class)))
+                    .thenReturn(Page.empty(PageRequest.of(0, 100)));
+
+            // Act
+            mockMvc.perform(get("/products").param("size", "5000")).andExpect(status().isOk());
+
+            // Assert: one request cannot make the service read the whole catalog
+            ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+            verify(productService).searchProducts(any(ProductSearchCriteria.class), pageable.capture());
+            assertEquals(100, pageable.getValue().getPageSize());
+        }
+
+        @Test
+        void sortByAFieldThatIsNotAllowed_returns400() throws Exception {
+            // Arrange
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class)))
+                    .thenThrow(new InvalidSortException("deleted", Set.of("name", "price", "createdAt")));
+
+            // Act & Assert
+            mockMvc.perform(get("/products").param("sort", "deleted,asc"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("INVALID_PARAMETER"))
+                    .andExpect(jsonPath("$.message").value("Cannot sort by 'deleted'; sort by one of [createdAt, name, price]"));
+        }
+
+        @Test
+        void priceThatIsNotANumber_returns400WithoutCallingTheService() throws Exception {
+            // Act & Assert
+            mockMvc.perform(get("/products").param("minPrice", "abc"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("INVALID_PARAMETER"))
+                    .andExpect(jsonPath("$.message").value("Invalid value for 'minPrice'"));
+            verifyNoInteractions(productService);
         }
     }
 
@@ -457,7 +520,7 @@ class ProductControllerWebMvcTest {
         @Test
         void unexpectedFailure_returns500WithoutInternalDetails() throws Exception {
             // Arrange
-            when(productService.getAllProducts())
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class)))
                     .thenThrow(new IllegalStateException("Connection refused: db-host:3306 for user admin"));
 
             // Act & Assert: the client gets a generic message; the details are only in the server log

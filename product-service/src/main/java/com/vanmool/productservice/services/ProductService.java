@@ -7,13 +7,14 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
 import java.util.UUID;
 
 public interface ProductService {
     Product getProductById(UUID id) throws ProductNotFoundException;
-    List<Product> getAllProducts();
-    List<Product> getProductsByCategory(String categoryName);
+    Page<Product> searchProducts(ProductSearchCriteria criteria, Pageable pageable);
     Product createProduct(ProductRequestDto productRequestDto);
     Product replaceProduct(UUID id, ProductRequestDto productRequestDto) throws ProductNotFoundException;
     Product patchProduct(UUID id, JsonPatch patch) throws ProductNotFoundException, JsonPatchException, JsonProcessingException;

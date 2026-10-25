@@ -1,10 +1,14 @@
 package com.vanmool.productservice.repositories;
 
 import com.vanmool.productservice.models.Product;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
-import java.util.List;
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,12 +19,29 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     @EntityGraph(attributePaths = "category")
     Optional<Product> findByIdAndDeletedFalse(UUID id);
 
+    // The catalog query behind GET /products. Every filter is optional: a null parameter switches its condition off.
+    // textPattern and originPattern are LIKE patterns ("%word%") built by the service, with "!" escaping a literal
+    // %, _ or ! typed by the user. The column collation makes matching case- and accent-insensitive.
+    // Pageable adds the LIMIT/OFFSET of the requested page and its ORDER BY; Spring Data also derives the count
+    // query that gives the total number of matches.
     @EntityGraph(attributePaths = "category")
-    List<Product> findAllByDeletedFalse();
-
-    // "Category_Name" walks Product.category to Category.name, so Spring Data joins the category table;
-    // the underscore makes that path explicit instead of leaving Spring Data to guess where the property splits.
-    // The column's MySQL collation is case-insensitive, so "natural foods" matches "Natural Foods".
-    @EntityGraph(attributePaths = "category")
-    List<Product> findAllByCategory_NameAndDeletedFalse(String categoryName);
+    @Query("""
+            SELECT p FROM Product p LEFT JOIN p.category c
+            WHERE p.deleted = false
+              AND (:textPattern IS NULL
+                   OR p.name LIKE :textPattern ESCAPE '!'
+                   OR p.description LIKE :textPattern ESCAPE '!'
+                   OR p.materials LIKE :textPattern ESCAPE '!'
+                   OR p.originRegion LIKE :textPattern ESCAPE '!'
+                   OR p.story LIKE :textPattern ESCAPE '!')
+              AND (:category IS NULL OR c.name = :category)
+              AND (:originPattern IS NULL OR p.originRegion LIKE :originPattern ESCAPE '!')
+              AND (:minPrice IS NULL OR p.price >= :minPrice)
+              AND (:maxPrice IS NULL OR p.price <= :maxPrice)""")
+    Page<Product> search(@Param("textPattern") String textPattern,
+                         @Param("category") String category,
+                         @Param("originPattern") String originPattern,
+                         @Param("minPrice") BigDecimal minPrice,
+                         @Param("maxPrice") BigDecimal maxPrice,
+                         Pageable pageable);
 }

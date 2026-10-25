@@ -7,15 +7,18 @@ import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
 import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.services.ProductSearchCriteria;
 import com.vanmool.productservice.services.ProductService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -114,33 +117,38 @@ class ProductControllerTest {
         assertThrows(ProductNotFoundException.class, () -> productController.getProductById(PRODUCT_ID));
     }
 
-    @ParameterizedTest
-    @NullAndEmptySource
-    @ValueSource(strings = {"   "})
-    void getAllProducts_withoutACategory_returnsEveryProduct(String category) {
+    @Test
+    void getProducts_passesEveryFilterToTheServiceAsOneCriteria() {
         // Arrange
-        when(productService.getAllProducts()).thenReturn(List.of(
-                product("Handcrafted Bamboo Basket", "Traditional Crafts"),
-                product("Ragi Biscuits", "Natural Foods")));
+        Pageable pageable = PageRequest.of(0, 20, Sort.by("price"));
+        ProductSearchCriteria expected = new ProductSearchCriteria("bamboo", "Traditional Crafts", "Dangs",
+                new BigDecimal("100"), new BigDecimal("600"));
+        when(productService.searchProducts(expected, pageable)).thenReturn(Page.empty(pageable));
 
-        // Act
-        List<ProductResponseDto> response = productController.getAllProducts(category);
+        // Act: a record has value equality, so the stub matches the equal criteria object the controller builds
+        Page<ProductResponseDto> response = productController.getProducts("bamboo", "Traditional Crafts", "Dangs",
+                new BigDecimal("100"), new BigDecimal("600"), pageable);
 
         // Assert
-        assertEquals(List.of("Handcrafted Bamboo Basket", "Ragi Biscuits"), names(response));
+        assertEquals(0, response.getTotalElements());
     }
 
     @Test
-    void getAllProducts_withACategory_returnsOnlyThatCategorysProducts() {
-        // Arrange
-        when(productService.getProductsByCategory("Natural Foods"))
-                .thenReturn(List.of(product("Ragi Biscuits", "Natural Foods")));
+    void getProducts_mapsEachProductAndKeepsThePageInformation() {
+        // Arrange: the second page of 3 products, 2 per page, so it holds only the third
+        Pageable secondPage = PageRequest.of(1, 2);
+        Page<Product> page = new PageImpl<>(List.of(product("Ragi Biscuits", "Natural Foods")), secondPage, 3);
+        when(productService.searchProducts(new ProductSearchCriteria(null, null, null, null, null), secondPage)).thenReturn(page);
 
         // Act
-        List<ProductResponseDto> response = productController.getAllProducts("Natural Foods");
+        Page<ProductResponseDto> response = productController.getProducts(null, null, null, null, null, secondPage);
 
         // Assert
-        assertEquals(List.of("Ragi Biscuits"), names(response));
+        assertEquals(List.of("Ragi Biscuits"), names(response.getContent()));
+        assertEquals("Natural Foods", response.getContent().get(0).getCategory());
+        assertEquals(1, response.getNumber());
+        assertEquals(3, response.getTotalElements());
+        assertEquals(2, response.getTotalPages());
     }
 
     @Test

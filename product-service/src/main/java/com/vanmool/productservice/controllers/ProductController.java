@@ -4,19 +4,23 @@ import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.services.ProductSearchCriteria;
 import com.vanmool.productservice.services.ProductService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.math.BigDecimal;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -27,18 +31,19 @@ public class ProductController {
         this.productService = productService;
     }
 
+    // The catalog: search, filters, paging and sorting, all optional query parameters, for example
+    // GET /products?q=bamboo&category=Traditional Crafts&minPrice=100&maxPrice=600&page=0&size=20&sort=price,asc
+    // Without parameters: the first 20 products, newest first. A page is never larger than 100 (application.properties).
     @GetMapping("/products")
-    public List<ProductResponseDto> getAllProducts(@RequestParam(value = "category", required = false) String category){
-        // GET /products?category=Natural Foods lists one category; without it (or left empty), every product
-        List<Product> products = (category == null || category.isBlank())
-                ? productService.getAllProducts()
-                : productService.getProductsByCategory(category);
-        //List<ProductResponseDto> productResponseDtos = products.stream().map(ProductResponseDto::from).toList();
-        List<ProductResponseDto> productResponseDtos = new ArrayList<>();
-        for(Product product : products){
-            productResponseDtos.add(ProductResponseDto.from(product));
-        }
-        return productResponseDtos;
+    public Page<ProductResponseDto> getProducts(@RequestParam(value = "q", required = false) String text,
+                                                @RequestParam(value = "category", required = false) String category,
+                                                @RequestParam(value = "origin", required = false) String origin,
+                                                @RequestParam(value = "minPrice", required = false) BigDecimal minPrice,
+                                                @RequestParam(value = "maxPrice", required = false) BigDecimal maxPrice,
+                                                @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
+                                                Pageable pageable){
+        ProductSearchCriteria criteria = new ProductSearchCriteria(text, category, origin, minPrice, maxPrice);
+        return productService.searchProducts(criteria, pageable).map(ProductResponseDto::from);
     }
 
     @GetMapping("/products/{id}")

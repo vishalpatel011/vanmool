@@ -37,6 +37,11 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.BAD_REQUEST, "INVALID_PARAMETER", "Invalid value for '" + e.getName() + "'", request);
     }
 
+    @ExceptionHandler(InvalidSortException.class)
+    public ResponseEntity<ErrorDto> handleInvalidSort(InvalidSortException e, HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_REQUEST, "INVALID_PARAMETER", e.getMessage(), request);
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorDto> handleInvalidRequestBody(MethodArgumentNotValidException e, HttpServletRequest request) {
         // A @Valid request body broke one or more rules; name every field, sorted so the message is stable

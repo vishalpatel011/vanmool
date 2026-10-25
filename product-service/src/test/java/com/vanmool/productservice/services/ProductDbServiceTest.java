@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
 import com.vanmool.productservice.models.Product;
@@ -18,9 +19,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -32,6 +39,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -122,6 +131,66 @@ class ProductDbServiceTest {
         ProductNotFoundException exception = assertThrows(ProductNotFoundException.class,
                 () -> productDbService.getProductById(PRODUCT_ID));
         assertTrue(exception.getMessage().contains(PRODUCT_ID.toString()));
+    }
+
+    @Test
+    void searchProducts_turnsTextIntoContainsPatternsAndBlankFiltersIntoNull() {
+        // Arrange
+        Pageable pageable = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt"));
+        when(productRepository.search(any(), any(), any(), any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        // Act
+        productDbService.searchProducts(new ProductSearchCriteria("  bamboo ", "   ", "Dangs",
+                new BigDecimal("100"), null), pageable);
+
+        // Assert: a blank filter is switched off (null), and words become "contains" patterns
+        verify(productRepository).search(eq("%bamboo%"), isNull(), eq("%Dangs%"), eq(new BigDecimal("100")), isNull(), any(Pageable.class));
+    }
+
+    @Test
+    void searchProducts_escapesLikeWildcardsTypedByTheUser() {
+        // Arrange
+        when(productRepository.search(any(), any(), any(), any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        // Act
+        productDbService.searchProducts(new ProductSearchCriteria("100%_off!", null, null, null, null), PageRequest.of(0, 20));
+
+        // Assert: % and _ are LIKE wildcards and ! is the escape character, so each is escaped with !
+        verify(productRepository).search(eq("%100!%!_off!!%"), isNull(), isNull(), isNull(), isNull(), any(Pageable.class));
+    }
+
+    @Test
+    void searchProducts_addsTheIdAsTheLastSortKeySoPagesAreStable() {
+        // Arrange
+        when(productRepository.search(any(), any(), any(), any(), any(), any(Pageable.class))).thenReturn(Page.empty());
+
+        // Act
+        productDbService.searchProducts(new ProductSearchCriteria(null, null, null, null, null),
+                PageRequest.of(3, 10, Sort.by(Sort.Direction.ASC, "price")));
+
+        // Assert
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(productRepository).search(isNull(), isNull(), isNull(), isNull(), isNull(), pageable.capture());
+        assertEquals(PageRequest.of(3, 10, Sort.by(Sort.Order.asc("price"), Sort.Order.asc("id"))), pageable.getValue());
+    }
+
+    @Test
+    void searchProducts_sortingByAFieldThatIsNotAllowed_throwsWithoutQuerying() {
+        // Act & Assert: deleted exists on the entity but is not a sort option for clients
+        assertThrows(InvalidSortException.class, () -> productDbService.searchProducts(
+                new ProductSearchCriteria(null, null, null, null, null), PageRequest.of(0, 20, Sort.by("deleted"))));
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void searchProducts_returnsTheRepositorysPage() {
+        // Arrange
+        Page<Product> page = new PageImpl<>(List.of(bambooBasket()));
+        when(productRepository.search(any(), any(), any(), any(), any(), any(Pageable.class))).thenReturn(page);
+
+        // Act & Assert
+        assertSame(page, productDbService.searchProducts(new ProductSearchCriteria("basket", null, null, null, null),
+                PageRequest.of(0, 20)));
     }
 
     @Test

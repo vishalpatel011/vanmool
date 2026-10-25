@@ -2,6 +2,7 @@ package com.vanmool.productservice.services;
 
 import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
+import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
 import com.vanmool.productservice.models.Product;
@@ -15,6 +16,10 @@ import com.github.fge.jsonpatch.JsonPatchException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validator;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +33,8 @@ import java.util.UUID;
 // once the session is closed. Reads need no transaction here: their queries fetch the category with @EntityGraph.
 @Service
 public class ProductDbService implements ProductService{
+    static final Set<String> SORTABLE_PROPERTIES = Set.of("name", "price", "createdAt");
+
     private final CategoryService categoryService;
     private final ProductRepository productRepository;
     private final Validator validator;
@@ -49,13 +56,25 @@ public class ProductDbService implements ProductService{
     }
 
     @Override
-    public List<Product> getAllProducts() {
-        return productRepository.findAllByDeletedFalse();
-    }
+    public Page<Product> searchProducts(ProductSearchCriteria criteria, Pageable pageable) {
+        // Only these fields may be sorted on; anything else would fail deep in the query, as a 500
+        for(Sort.Order order : pageable.getSort()) {
+            if(!SORTABLE_PROPERTIES.contains(order.getProperty())) {
+                throw new InvalidSortException(order.getProperty(), SORTABLE_PROPERTIES);
+            }
+        }
+        // The id is added as the last sort key. It is unique, so products with the same price or name keep one
+        // fixed order between requests, and none can appear on two pages or on none
+        Pageable stablePageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                pageable.getSort().and(Sort.by("id")));
 
-    @Override
-    public List<Product> getProductsByCategory(String categoryName) {
-        return productRepository.findAllByCategory_NameAndDeletedFalse(categoryName);
+        return productRepository.search(
+                containsPattern(criteria.text()),
+                blankToNull(criteria.category()),
+                containsPattern(criteria.origin()),
+                criteria.minPrice(),
+                criteria.maxPrice(),
+                stablePageable);
     }
 
     @Override
@@ -109,6 +128,21 @@ public class ProductDbService implements ProductService{
         Product product = getProductById(id);
         product.setDeleted(true);
         productRepository.save(product);
+    }
+
+    // "%word%" for LIKE, or null when there is nothing to search for. %, _ and the escape character ! itself are
+    // escaped, so searching for "100%" finds that text instead of everything starting with "100"
+    private static String containsPattern(String value) {
+        String text = blankToNull(value);
+        if(text == null) {
+            return null;
+        }
+        String escaped = text.replace("!", "!!").replace("%", "!%").replace("_", "!_");
+        return "%" + escaped + "%";
+    }
+
+    private static String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
     }
 
     private void buildProduct(Product product, ProductRequestDto productRequestDto) {

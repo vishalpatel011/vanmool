@@ -16,6 +16,9 @@ public class ProductResponseDto {
     private String description;
     private String imageUrl;
     private String category;
+    private String originRegion;
+    private String materials;
+    private String story;
 
     public static ProductResponseDto from(Product product){
         ProductResponseDto productResponseDto = new ProductResponseDto();
@@ -25,6 +28,9 @@ public class ProductResponseDto {
         productResponseDto.description = product.getDescription();
         productResponseDto.imageUrl = product.getImageUrl();
         productResponseDto.category = product.getCategory() != null ? product.getCategory().getName() : null;
+        productResponseDto.originRegion = product.getOriginRegion();
+        productResponseDto.materials = product.getMaterials();
+        productResponseDto.story = product.getStory();
         return productResponseDto;
     }
 }

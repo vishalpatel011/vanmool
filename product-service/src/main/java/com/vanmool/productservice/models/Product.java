@@ -13,7 +13,7 @@ import java.math.BigDecimal;
 @Setter
 @Entity
 public class Product extends Base{
-    // Long enough for how and where a product is made, not just a one-line summary
+    // What the product is: size, use, care. Up to 2000 characters
     @Column(length = 2000)
     private String description;
     private String imageUrl;
@@ -24,5 +24,11 @@ public class Product extends Base{
     // Money is stored exactly: DECIMAL(10,2), never a floating-point type
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
+    // Provenance: where the product comes from ("Dangs, Gujarat"), what it is made of ("Bamboo"),
+    // and the story of the people who make it. All optional (migration V3)
+    private String originRegion;
+    private String materials;
+    @Column(length = 2000)
+    private String story;
 }
 

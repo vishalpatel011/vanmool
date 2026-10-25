@@ -62,7 +62,10 @@ class ProductControllerWebMvcTest {
               "price": 499.99,
               "description": "Woven by hand from local bamboo in Dangs, Gujarat",
               "imageUrl": "https://example.com/images/bamboo-basket.jpg",
-              "category": "Traditional Crafts"
+              "category": "Traditional Crafts",
+              "originRegion": "Dangs, Gujarat",
+              "materials": "Bamboo",
+              "story": "Woven by Warli and Kokna artisans in the Dangs forests, using skills passed down in their families"
             }""";
 
     @Autowired
@@ -88,6 +91,9 @@ class ProductControllerWebMvcTest {
         Product basket = product(PRODUCT_ID, "Handcrafted Bamboo Basket", "499.99", "Traditional Crafts");
         basket.setDescription("Woven by hand from local bamboo in Dangs, Gujarat");
         basket.setImageUrl("https://example.com/images/bamboo-basket.jpg");
+        basket.setOriginRegion("Dangs, Gujarat");
+        basket.setMaterials("Bamboo");
+        basket.setStory("Woven by Warli and Kokna artisans in the Dangs forests, using skills passed down in their families");
         return basket;
     }
 
@@ -159,7 +165,10 @@ class ProductControllerWebMvcTest {
                               "price": 499.99,
                               "description": "Woven by hand from local bamboo in Dangs, Gujarat",
                               "imageUrl": "https://example.com/images/bamboo-basket.jpg",
-                              "category": "Traditional Crafts"
+                              "category": "Traditional Crafts",
+                              "originRegion": "Dangs, Gujarat",
+                              "materials": "Bamboo",
+                              "story": "Woven by Warli and Kokna artisans in the Dangs forests, using skills passed down in their families"
                             }""", JsonCompareMode.STRICT));
         }
 
@@ -214,6 +223,9 @@ class ProductControllerWebMvcTest {
             assertEquals(new BigDecimal("499.99"), received.getValue().getPrice());
             assertEquals("https://example.com/images/bamboo-basket.jpg", received.getValue().getImageUrl());
             assertEquals("Traditional Crafts", received.getValue().getCategory());
+            assertEquals("Dangs, Gujarat", received.getValue().getOriginRegion());
+            assertEquals("Bamboo", received.getValue().getMaterials());
+            assertEquals("Woven by Warli and Kokna artisans in the Dangs forests, using skills passed down in their families", received.getValue().getStory());
         }
 
         @Test
@@ -239,7 +251,16 @@ class ProductControllerWebMvcTest {
                             "{ \"name\": \"" + "a".repeat(256) + "\", \"price\": 10 }", "name: "),
                     Arguments.of("description over 2000 characters",
                             "{ \"name\": \"Ragi Biscuits\", \"price\": 10, \"description\": \"" + "a".repeat(2001) + "\" }",
-                            "description: "));
+                            "description: "),
+                    Arguments.of("origin region over 255 characters",
+                            "{ \"name\": \"Ragi Biscuits\", \"price\": 10, \"originRegion\": \"" + "a".repeat(256) + "\" }",
+                            "originRegion: "),
+                    Arguments.of("materials over 255 characters",
+                            "{ \"name\": \"Ragi Biscuits\", \"price\": 10, \"materials\": \"" + "a".repeat(256) + "\" }",
+                            "materials: "),
+                    Arguments.of("story over 2000 characters",
+                            "{ \"name\": \"Ragi Biscuits\", \"price\": 10, \"story\": \"" + "a".repeat(2001) + "\" }",
+                            "story: "));
         }
 
         @ParameterizedTest(name = "{0}")

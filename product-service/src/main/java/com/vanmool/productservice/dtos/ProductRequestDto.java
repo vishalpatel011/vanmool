@@ -10,7 +10,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 
-// The limits match the product table: VARCHAR(2000) description, VARCHAR(255) other text, DECIMAL(10,2) price
+// The limits match the product table: VARCHAR(2000) description and story, VARCHAR(255) other text, DECIMAL(10,2) price
 @Getter
 @Setter
 public class ProductRequestDto {
@@ -31,4 +31,13 @@ public class ProductRequestDto {
 
     @Size(max = 255)
     private String category;
+
+    @Size(max = 255)
+    private String originRegion;
+
+    @Size(max = 255)
+    private String materials;
+
+    @Size(max = 2000)
+    private String story;
 }

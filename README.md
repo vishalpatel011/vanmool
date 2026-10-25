@@ -23,7 +23,7 @@ Products are meant to carry their origin and story, not just catalog data:
 | Materials | Bamboo |
 | Story | Woven by hand using traditional techniques |
 
-Today the catalog stores name, description, price, image and category. Origin, producer, materials and story are planned additions to the product model.
+The catalog stores each product's name, description, price, image and category, and its provenance: origin region, materials and the maker's story. The producer will be linked to the seller's own account once the user service exists.
 
 ## Architecture
 
@@ -201,9 +201,12 @@ Request body for `POST` and `PUT`:
 {
   "name": "Handcrafted Bamboo Basket",
   "price": 450,
-  "description": "Woven by hand in Dangs, Gujarat",
+  "description": "A round basket for fruit or bread, about 30 cm across",
   "imageUrl": "https://example.com/images/bamboo-basket.jpg",
-  "category": "Traditional Crafts"
+  "category": "Traditional Crafts",
+  "originRegion": "Dangs, Gujarat",
+  "materials": "Bamboo",
+  "story": "Woven by hand by tribal artisans in the Dangs district, using techniques passed down in their families"
 }
 ```
 
@@ -213,8 +216,8 @@ Request bodies are validated before anything is saved:
 |---|---|
 | `name` | required, not blank, at most 255 characters |
 | `price` | required, greater than 0, at most 8 digits before and 2 after the decimal point |
-| `description` | optional, at most 2000 characters |
-| `imageUrl`, `category` | optional, at most 255 characters each |
+| `description`, `story` | optional, at most 2000 characters each |
+| `imageUrl`, `category`, `originRegion`, `materials` | optional, at most 255 characters each |
 
 A request that breaks a rule gets 400 with every failing field in the message (`"error": "VALIDATION_FAILED"`, `"message": "name: must not be blank; price: must be greater than 0"`).
 

@@ -70,6 +70,9 @@ class ProductControllerTest {
         basket.setDescription("Woven by hand from local bamboo in Dangs, Gujarat");
         basket.setImageUrl("https://example.com/images/bamboo-basket.jpg");
         basket.setPrice(new BigDecimal("499.99"));
+        basket.setOriginRegion("Dangs, Gujarat");
+        basket.setMaterials("Bamboo");
+        basket.setStory("Woven by artisans in the Dangs forests");
         when(productService.getProductById(PRODUCT_ID)).thenReturn(basket);
 
         // Act
@@ -82,7 +85,10 @@ class ProductControllerTest {
                 () -> assertEquals("Woven by hand from local bamboo in Dangs, Gujarat", response.getDescription()),
                 () -> assertEquals("https://example.com/images/bamboo-basket.jpg", response.getImageUrl()),
                 () -> assertEquals(new BigDecimal("499.99"), response.getPrice()),
-                () -> assertEquals("Traditional Crafts", response.getCategory())
+                () -> assertEquals("Traditional Crafts", response.getCategory()),
+                () -> assertEquals("Dangs, Gujarat", response.getOriginRegion()),
+                () -> assertEquals("Bamboo", response.getMaterials()),
+                () -> assertEquals("Woven by artisans in the Dangs forests", response.getStory())
         );
     }
 

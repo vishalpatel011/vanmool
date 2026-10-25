@@ -117,6 +117,9 @@ public class ProductDbService implements ProductService{
         product.setDescription(productRequestDto.getDescription());
         product.setPrice(productRequestDto.getPrice());
         product.setImageUrl(productRequestDto.getImageUrl());
+        product.setOriginRegion(productRequestDto.getOriginRegion());
+        product.setMaterials(productRequestDto.getMaterials());
+        product.setStory(productRequestDto.getStory());
 
         Category categoryObj = categoryService.findOrCreateCategory(productRequestDto.getCategory());
         product.setCategory(categoryObj);

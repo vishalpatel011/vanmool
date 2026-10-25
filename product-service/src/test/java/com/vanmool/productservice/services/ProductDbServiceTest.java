@@ -74,6 +74,9 @@ class ProductDbServiceTest {
         product.setPrice(new BigDecimal("499.99"));
         product.setImageUrl("https://example.com/images/bamboo-basket.jpg");
         product.setCategory(category("Traditional Crafts"));
+        product.setOriginRegion("Dangs, Gujarat");
+        product.setMaterials("Bamboo");
+        product.setStory("Woven by artisans in the Dangs forests");
         return product;
     }
 
@@ -128,9 +131,14 @@ class ProductDbServiceTest {
         when(categoryService.findOrCreateCategory("Natural Foods")).thenReturn(naturalFoods);
         saveReturnsItsArgument();
 
+        ProductRequestDto ragiBiscuits = request("Ragi Biscuits", "Baked with finger millet from Gujarat",
+                "120.00", "https://example.com/images/ragi-biscuits.jpg", "Natural Foods");
+        ragiBiscuits.setOriginRegion("Gujarat");
+        ragiBiscuits.setMaterials("Finger millet flour, jaggery");
+        ragiBiscuits.setStory("Baked by a women's self-help group");
+
         // Act
-        Product result = productDbService.createProduct(request("Ragi Biscuits", "Baked with finger millet from Gujarat",
-                "120.00", "https://example.com/images/ragi-biscuits.jpg", "Natural Foods"));
+        Product result = productDbService.createProduct(ragiBiscuits);
 
         // Assert: the service creates the Product itself, so an ArgumentCaptor catches what was saved
         ArgumentCaptor<Product> saved = ArgumentCaptor.forClass(Product.class);
@@ -142,6 +150,9 @@ class ProductDbServiceTest {
                 () -> assertEquals(new BigDecimal("120.00"), result.getPrice()),
                 () -> assertEquals("https://example.com/images/ragi-biscuits.jpg", result.getImageUrl()),
                 () -> assertSame(naturalFoods, result.getCategory()),
+                () -> assertEquals("Gujarat", result.getOriginRegion()),
+                () -> assertEquals("Finger millet flour, jaggery", result.getMaterials()),
+                () -> assertEquals("Baked by a women's self-help group", result.getStory()),
                 () -> assertFalse(result.isDeleted())
         );
     }
@@ -179,7 +190,10 @@ class ProductDbServiceTest {
                 () -> assertNull(result.getDescription()),
                 () -> assertEquals(new BigDecimal("650.00"), result.getPrice()),
                 () -> assertNull(result.getImageUrl()),
-                () -> assertSame(tribalArt, result.getCategory())
+                () -> assertSame(tribalArt, result.getCategory()),
+                () -> assertNull(result.getOriginRegion()),
+                () -> assertNull(result.getMaterials()),
+                () -> assertNull(result.getStory())
         );
         verify(productRepository).save(basket);
     }
@@ -215,8 +229,28 @@ class ProductDbServiceTest {
                 () -> assertEquals("Handcrafted Bamboo Basket", result.getName()),
                 () -> assertEquals("Woven by hand from local bamboo in Dangs, Gujarat", result.getDescription()),
                 () -> assertEquals("https://example.com/images/bamboo-basket.jpg", result.getImageUrl()),
-                () -> assertSame(traditionalCrafts, result.getCategory())
+                () -> assertSame(traditionalCrafts, result.getCategory()),
+                () -> assertEquals("Dangs, Gujarat", result.getOriginRegion()),
+                () -> assertEquals("Bamboo", result.getMaterials())
         );
+    }
+
+    @Test
+    void patchProduct_canSetAProvenanceFieldThatWasEmpty() throws Exception {
+        // Arrange: a product created before migration V3 has no origin yet
+        Product basket = bambooBasket();
+        basket.setOriginRegion(null);
+        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(basket));
+        when(categoryService.findOrCreateCategory("Traditional Crafts")).thenReturn(basket.getCategory());
+        saveReturnsItsArgument();
+
+        // Act
+        Product result = productDbService.patchProduct(PRODUCT_ID,
+                patch("[{\"op\": \"replace\", \"path\": \"/originRegion\", \"value\": \"Dangs, Gujarat\"}]"));
+
+        // Assert
+        assertEquals("Dangs, Gujarat", result.getOriginRegion());
+        assertEquals(new BigDecimal("499.99"), result.getPrice());
     }
 
     @Test

@@ -1,5 +1,9 @@
 package com.vanmool.userauthservice.services;
 
+import com.vanmool.userauthservice.events.OutboxWriter;
+import com.vanmool.userauthservice.events.UserRegisteredEvent;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
@@ -45,6 +49,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -70,6 +76,12 @@ class UserServiceImplTest {
     @Mock
     private AuthenticationManager authenticationManager;
 
+    @Mock
+    private OutboxWriter outboxWriter;
+
+    // A real TransactionTemplate around a mocked transaction manager: the callback runs, no database is involved
+    private final TransactionTemplate transactionTemplate = new TransactionTemplate(mock(PlatformTransactionManager.class));
+
     private JwtService jwtService;
     private UserServiceImpl userService;
 
@@ -78,7 +90,7 @@ class UserServiceImplTest {
         jwtService = new JwtService(new RSAKeyGenerator(2048).keyID("test-key").generate(), "http://localhost:8081",
                 Clock.fixed(NOW, ZoneOffset.UTC));
         userService = new UserServiceImpl(userRepository, tokenRepository, passwordEncoder, authenticationManager,
-                jwtService, Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY);
+                jwtService, Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY, outboxWriter, transactionTemplate);
     }
 
     private static User asha() {
@@ -114,6 +126,15 @@ class UserServiceImplTest {
         });
     }
 
+    // saveAndFlush() gives the user its generated id, as Hibernate does on insert
+    private void saveAndFlushAssignsUserId() {
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(invocation -> {
+            User user = invocation.getArgument(0);
+            user.setId(ASHA_ID);
+            return user;
+        });
+    }
+
     private String jwtFor(UUID tokenId) {
         return jwtService.issue(ASHA_ID, "asha@example.com", Set.of(Role.CUSTOMER), tokenId, NOW, NOW.plus(TOKEN_VALIDITY));
     }
@@ -125,14 +146,14 @@ class UserServiceImplTest {
             // Arrange
             when(userRepository.existsByEmail("asha@example.com")).thenReturn(false);
             when(passwordEncoder.encode("correct horse battery")).thenReturn("$2a$12$hashed");
-            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            saveAndFlushAssignsUserId();
 
             // Act
             User result = userService.signup("  Asha Gamit ", "  Asha@Example.COM ", "correct horse battery");
 
             // Assert: the service builds the User itself, so a captor catches what was saved
             ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
-            verify(userRepository).save(saved.capture());
+            verify(userRepository).saveAndFlush(saved.capture());
             assertSame(saved.getValue(), result);
             assertAll(
                     () -> assertEquals("Asha Gamit", result.getName()),
@@ -150,8 +171,31 @@ class UserServiceImplTest {
             // Act & Assert
             assertThrows(EmailAlreadyRegisteredException.class,
                     () -> userService.signup("Asha", "ASHA@example.com", "correct horse battery"));
-            verify(userRepository, never()).save(any());
+            verify(userRepository, never()).saveAndFlush(any());
             verify(passwordEncoder, never()).encode(any());
+            verifyNoInteractions(outboxWriter);
+        }
+
+        @Test
+        void recordsAUserRegisteredEvent_keyedByTheUserId_withoutThePassword() {
+            // Arrange
+            when(userRepository.existsByEmail("asha@example.com")).thenReturn(false);
+            when(passwordEncoder.encode("correct horse battery")).thenReturn("$2a$12$hashed");
+            saveAndFlushAssignsUserId();
+            ArgumentCaptor<UserRegisteredEvent> event = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+
+            // Act
+            userService.signup("Asha Gamit", "asha@example.com", "correct horse battery");
+
+            // Assert
+            verify(outboxWriter).add(eq("user-events"), eq(ASHA_ID.toString()), event.capture());
+            assertAll(
+                    () -> assertEquals("UserRegistered", event.getValue().eventType()),
+                    () -> assertEquals(ASHA_ID, event.getValue().userId()),
+                    () -> assertEquals("Asha Gamit", event.getValue().name()),
+                    () -> assertEquals("asha@example.com", event.getValue().email()),
+                    () -> assertEquals(NOW, event.getValue().occurredAt())
+            );
         }
 
         @Test
@@ -159,12 +203,13 @@ class UserServiceImplTest {
             // Arrange: the check passed, but a concurrent request inserted the email first and the unique key stopped ours
             when(userRepository.existsByEmail("asha@example.com")).thenReturn(false);
             when(passwordEncoder.encode(any())).thenReturn("$2a$12$hashed");
-            when(userRepository.save(any(User.class)))
+            when(userRepository.saveAndFlush(any(User.class)))
                     .thenThrow(new DataIntegrityViolationException("Duplicate entry 'asha@example.com' for key 'uk_users_email'"));
 
-            // Act & Assert
+            // Act & Assert: and no event, since there is no new account
             assertThrows(EmailAlreadyRegisteredException.class,
                     () -> userService.signup("Asha", "asha@example.com", "correct horse battery"));
+            verifyNoInteractions(outboxWriter);
         }
     }
 

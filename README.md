@@ -88,11 +88,12 @@ Target architecture (services are added one at a time; the table below shows wha
 | Spring Authorization Server | OAuth2 / OpenID Connect authorization code flow with PKCE | In use |
 | Redis 7 (Spring Data Redis, Lettuce) | Product cache | In use |
 | Redis | Cart storage | In use |
-| Apache Kafka | Domain events between services | Planned |
+| Apache Kafka 3.9 (Spring for Apache Kafka) | Domain events between services, sent through a transactional outbox | In use |
+| Mailpit | Catches the emails sent in development and shows them in a web page | In use |
 | RestClient | Calls between services (cart to product), with timeouts | In use |
 | Spring Cloud Gateway, Eureka | Routing and service discovery | Planned |
 | Razorpay, Stripe | Payments | Planned |
-| Docker Compose | Local infrastructure (Redis) | In use |
+| Docker Compose | Local infrastructure (Redis, Kafka, Mailpit) | In use |
 | Docker | Containers for the services | Planned |
 | AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
 
@@ -104,7 +105,7 @@ vanmool/
 ├── mvnw, mvnw.cmd       Maven wrapper
 ├── .mvn/
 ├── .env.example         environment variables the services read
-├── docker-compose.yml   local infrastructure: Redis
+├── docker-compose.yml   local infrastructure: Redis, Kafka, Mailpit
 ├── user-auth-service/   accounts, login and tokens (same layout as product-service)
 ├── cart-service/       shopping carts in Redis (same layout; clients/ holds the call to product-service)
 ├── order-service/      orders (same layout; clients/ holds the calls to cart-service and product-service)
@@ -134,7 +135,7 @@ Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xm
 
 - JDK 17 or newer
 - MySQL 8
-- Docker, for Redis (`docker compose`)
+- Docker, for Redis, Kafka and Mailpit (`docker compose`)
 - Maven is not required; the repository includes the Maven wrapper.
 
 ### 1. Create the database
@@ -161,13 +162,19 @@ The tables are created by Flyway, not by hand and not by Hibernate. On startup F
 
 A schema change is always a new script with the next version number, named `V<version>__<description>.sql` (for example `V1__create_category_and_product_tables.sql`). A script that has already been applied is never edited: Flyway stores a checksum of each script and refuses to start if an applied one changes.
 
-### 2. Start Redis
+### 2. Start Redis, Kafka and Mailpit
 
 ```
-docker compose up -d redis
+docker compose up -d
 ```
 
-This starts Redis 7 on `localhost:6379`, reachable from this machine only. Its data is kept in a Docker volume (`redis-data`) and written to disk once a second (append-only file), so it survives a restart of the container. `docker compose stop redis` stops it; `docker compose down -v` also deletes its data.
+This starts, reachable from this machine only:
+
+- **Redis 7** on `localhost:6379`. Its data is kept in a Docker volume (`redis-data`) and written to disk once a second (append-only file), so it survives a restart of the container.
+- **Kafka 3.9** on `localhost:9092`: one broker in KRaft mode (no ZooKeeper), data in the `kafka-data` volume. Topics are not created automatically; each service declares the topics it owns when it starts.
+- **Mailpit**: an SMTP server on `localhost:1025` that keeps every email instead of delivering it, with a web page at http://localhost:8025 to read them.
+
+`docker compose stop` stops them; `docker compose down -v` also deletes their data.
 
 ### 3. Set the environment variables
 
@@ -179,6 +186,7 @@ Each service reads its settings from the environment of its own process, so the 
 | `DB_USERNAME` | Database user | `ProductService_user` | `UserAuthService_user` | not used | `OrderService_user` |
 | `DB_PASSWORD` | Database password | empty | empty | not used | empty |
 | `SERVER_PORT` | HTTP port | `8080` | `8081` | `8082` | `8083` |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | not used | `localhost:9092` | not used | not used |
 | `REDIS_HOST`, `REDIS_PORT` | Redis server | `localhost`, `6379` | not used | `localhost`, `6379` | not used |
 | `REDIS_PASSWORD` | Redis password, if the server requires one | empty | not used | empty | not used |
 | `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used | not used | not used |
@@ -543,6 +551,32 @@ Payment is not connected yet, so orders stay `PENDING_PAYMENT` until they are ca
 
 Errors use the same format as the other services. Codes: `INVALID_TOKEN` (401), `FORBIDDEN` (403), `ORDER_NOT_FOUND` (404), `CART_EMPTY`, `INSUFFICIENT_STOCK`, `PRODUCT_UNAVAILABLE` and `INVALID_ORDER_STATE` (409), `CART_SERVICE_UNAVAILABLE` and `PRODUCT_SERVICE_UNAVAILABLE` (503), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
 
+## Events (Kafka)
+
+Services tell each other what happened through Kafka, when the sender does not need an answer: a signup does not wait for the welcome email. Requests that need an answer at once (a price, a stock reservation) stay REST calls.
+
+| Topic | Owner (producer) | Event | Key | Consumers |
+|---|---|---|---|---|
+| `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
+
+Every event is one JSON object with `eventId`, `eventType` and `occurredAt` first, then its own fields, for example:
+
+```json
+{ "eventId": "0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10", "eventType": "UserRegistered", "occurredAt": "2026-10-25T15:38:42.512Z",
+  "userId": "a8c1e6ff-556d-4dd2-a238-148b3fca351c", "name": "Asha Gamit", "email": "asha@example.com" }
+```
+
+**Transactional outbox.** A service never sends an event straight to Kafka from its business code. It writes the event into its own `outbox_event` table in the same database transaction as the change (the new account), so both are saved or neither is. A relay sends unsent rows to Kafka every second, oldest first, waits for the broker to confirm each one (`acks=all`), and marks it sent. If Kafka is down, events wait in the table and go out when it is back; nothing is lost and no event is sent for a change that was rolled back. Sent rows are deleted after 7 days.
+
+Delivery is therefore *at least once*: an event can arrive twice (for example if the service stops right after Kafka accepted it), so consumers recognise repeats by `eventId`. Events with the same key go to the same partition and are read in order.
+
+```
+MSYS_NO_PATHCONV=1 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server localhost:9092 --topic user-events --from-beginning --property print.key=true
+```
+
+(`MSYS_NO_PATHCONV=1` is only needed in Git Bash on Windows.)
+
 ## Testing
 
 Tests follow the testing pyramid: many fast unit tests, a few slower integration tests.
@@ -580,7 +614,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Redis: product cache
 - [x] Redis: cart storage
 - [x] Product search, pagination, sorting and filtering
-- [ ] Kafka domain events
+- [x] Kafka domain events through a transactional outbox: `UserRegistered`
 - [ ] Payment Service: Razorpay and Stripe, webhooks, reconciliation
 - [x] Cart service: carts in Redis, current prices from the product service, JWTs checked with the user-auth service's public keys
 - [x] Order service: checkout from the cart with stock reservations, Idempotency-Key, order history, cancellation

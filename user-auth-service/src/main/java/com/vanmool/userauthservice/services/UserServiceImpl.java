@@ -1,5 +1,9 @@
 package com.vanmool.userauthservice.services;
 
+import com.vanmool.userauthservice.configs.KafkaConfig;
+import com.vanmool.userauthservice.events.OutboxWriter;
+import com.vanmool.userauthservice.events.UserRegisteredEvent;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
 import com.vanmool.userauthservice.exceptions.InvalidTokenException;
@@ -35,10 +39,13 @@ public class UserServiceImpl implements UserService {
     private final JwtService jwtService;
     private final Clock clock;
     private final Duration tokenValidity;
+    private final OutboxWriter outboxWriter;
+    private final TransactionTemplate transactionTemplate;
 
     public UserServiceImpl(UserRepository userRepository, TokenRepository tokenRepository, PasswordEncoder passwordEncoder,
                            AuthenticationManager authenticationManager, JwtService jwtService, Clock clock,
-                           @Value("${auth.token-validity}") Duration tokenValidity) {
+                           @Value("${auth.token-validity}") Duration tokenValidity, OutboxWriter outboxWriter,
+                           TransactionTemplate transactionTemplate) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -46,6 +53,8 @@ public class UserServiceImpl implements UserService {
         this.jwtService = jwtService;
         this.clock = clock;
         this.tokenValidity = tokenValidity;
+        this.outboxWriter = outboxWriter;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Override
@@ -58,11 +67,19 @@ public class UserServiceImpl implements UserService {
         User user = new User();
         user.setName(name.trim());
         user.setEmail(normalizedEmail);
-        // Only the BCrypt hash is stored; it contains its own random salt
+        // Only the BCrypt hash is stored; it contains its own random salt. Hashed before the transaction starts:
+        // it takes about 0.3 s, and no database connection should be held while it runs
         user.setPasswordHash(passwordEncoder.encode(password));
         user.getRoles().add(Role.CUSTOMER);
         try {
-            return userRepository.save(user);
+            // The account and its UserRegistered event are saved in one transaction: both or neither.
+            // saveAndFlush runs the INSERT now, so a duplicate email fails here and not at the commit
+            return transactionTemplate.execute(status -> {
+                User saved = userRepository.saveAndFlush(user);
+                outboxWriter.add(KafkaConfig.USER_EVENTS_TOPIC, saved.getId().toString(),
+                        UserRegisteredEvent.of(saved.getId(), saved.getName(), saved.getEmail(), clock.instant()));
+                return saved;
+            });
         } catch (DataIntegrityViolationException e) {
             // Another request registered the same email after our check; the unique constraint stopped the duplicate
             throw new EmailAlreadyRegisteredException(normalizedEmail);

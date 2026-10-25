@@ -79,6 +79,7 @@ class OAuth2FlowIT {
 
     @AfterEach
     void removeUser() {
+        jdbcTemplate.update("DELETE FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.email') = ?", email);
         jdbcTemplate.update("DELETE r FROM user_role r JOIN users u ON u.id = r.user_id WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE FROM users WHERE email = ?", email);
     }

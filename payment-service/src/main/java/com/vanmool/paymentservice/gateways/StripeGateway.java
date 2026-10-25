@@ -53,6 +53,12 @@ public class StripeGateway implements PaymentGateway {
         return new StripeClient(secretKey);
     }
 
+    // Stripe's SDK waits up to 80 s for an answer by default; a payment request should fail over to another gateway
+    // much sooner. Retries are safe: they reuse the idempotency key
+    private static RequestOptions.RequestOptionsBuilder options() {
+        return RequestOptions.builder().setConnectTimeout(5_000).setReadTimeout(20_000).setMaxNetworkRetries(2);
+    }
+
     @Override
     public GatewayLink createLink(GatewayPaymentRequest request) {
         String callback = publicBaseUrl + "/payments/callback/stripe?session_id={CHECKOUT_SESSION_ID}";
@@ -79,7 +85,7 @@ public class StripeGateway implements PaymentGateway {
         }
         try {
             Session session = client().v1().checkout().sessions().create(params.build(),
-                    RequestOptions.builder().setIdempotencyKey(request.paymentId().toString()).build());
+                    options().setIdempotencyKey(request.paymentId().toString()).build());
             return new GatewayLink(session.getId(), session.getUrl());
         } catch (StripeException | RuntimeException e) {
             throw new GatewayUnavailableException("Stripe could not create the checkout session: " + e.getMessage(), e);
@@ -89,7 +95,7 @@ public class StripeGateway implements PaymentGateway {
     @Override
     public GatewayStatus fetchStatus(String gatewayReference) {
         try {
-            return statusOf(client().v1().checkout().sessions().retrieve(gatewayReference));
+            return statusOf(client().v1().checkout().sessions().retrieve(gatewayReference, options().build()));
         } catch (StripeException | RuntimeException e) {
             throw new GatewayUnavailableException("Stripe could not return the checkout session: " + e.getMessage(), e);
         }
@@ -98,7 +104,7 @@ public class StripeGateway implements PaymentGateway {
     @Override
     public void cancelLink(String gatewayReference) {
         try {
-            client().v1().checkout().sessions().expire(gatewayReference);
+            client().v1().checkout().sessions().expire(gatewayReference, options().build());
         } catch (StripeException | RuntimeException e) {
             throw new GatewayUnavailableException("Stripe could not expire the checkout session: " + e.getMessage(), e);
         }

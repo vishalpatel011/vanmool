@@ -56,6 +56,13 @@ public class PaymentService {
     public record StartedPayment(PaymentResponseDto payment, boolean created) {
     }
 
+    // A gateway answers within this time (Razorpay's SDK waits up to 60 s, Stripe's calls are capped lower), so a
+    // payment that still has no link after it was abandoned half way
+    static final Duration LINK_CREATION_LIMIT = Duration.ofMinutes(5);
+    // How long a second request for the same order waits for the first one's link: 30 x 100 ms
+    private static final int LINK_WAIT_ATTEMPTS = 30;
+    private static final Duration LINK_WAIT_STEP = Duration.ofMillis(100);
+
     private final PaymentRepository paymentRepository;
     private final PaymentStatusChangeRepository statusChangeRepository;
     private final ProcessedGatewayEventRepository processedEventRepository;
@@ -92,11 +99,28 @@ public class PaymentService {
         Optional<Payment> open = paymentRepository.findByOrderIdAndStatus(orderId, PaymentStatus.CREATED);
         if (open.isPresent()) {
             Payment payment = open.get();
+            if (payment.getPaymentUrl() == null && payment.getCreatedAt().isAfter(clock.instant().minus(LINK_CREATION_LIMIT))) {
+                // A request a moment ago (a double click) is creating this payment's link right now: wait for it
+                payment = waitForLink(payment);
+            }
             if (payment.getPaymentUrl() != null && payment.getExpiresAt().isAfter(clock.instant())) {
                 return new StartedPayment(PaymentResponseDto.from(payment), false);
             }
-            // Past its expiry: ask the gateway, which normally reports EXPIRED and so closes it
-            if (payment.getGateway() != null) {
+            if (payment.getPaymentUrl() == null && payment.getStatus() == PaymentStatus.CREATED) {
+                if (payment.getCreatedAt().isAfter(clock.instant().minus(LINK_CREATION_LIMIT))) {
+                    throw new PaymentInProgressException("A payment link for order " + orderId
+                            + " is being created; please try again in a moment");
+                }
+                // No link long after it was started: the request that created it failed half way, and nobody was
+                // given anything to pay. Close it so the order can be paid
+                Payment abandoned = payment;
+                transactionTemplate.executeWithoutResult(status -> {
+                    if (paymentRepository.finish(abandoned.getId(), PaymentStatus.FAILED, null) == 1) {
+                        record(abandoned.getId(), PaymentStatus.FAILED, Source.API, "No payment link was ever created");
+                    }
+                });
+            } else if (payment.getStatus() == PaymentStatus.CREATED) {
+                // Past its expiry: ask the gateway, which normally reports EXPIRED and so closes it
                 reconcile(payment, Source.API);
             }
             if (paymentRepository.existsByOrderIdAndStatus(orderId, PaymentStatus.CREATED)) {
@@ -157,6 +181,22 @@ public class PaymentService {
         });
         throw lastFailure != null ? lastFailure
                 : new GatewayUnavailableException("No payment gateway is enabled", null);
+    }
+
+    // Re-reads the payment a few times, until the request that is creating its link has saved it
+    private Payment waitForLink(Payment payment) {
+        Payment current = payment;
+        for (int attempt = 0; attempt < LINK_WAIT_ATTEMPTS && current.getPaymentUrl() == null
+                && current.getStatus() == PaymentStatus.CREATED; attempt++) {
+            try {
+                Thread.sleep(LINK_WAIT_STEP.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            current = paymentRepository.findById(payment.getId()).orElse(current);
+        }
+        return current;
     }
 
     public PaymentDetailsDto getPayment(UUID userId, UUID paymentId) {

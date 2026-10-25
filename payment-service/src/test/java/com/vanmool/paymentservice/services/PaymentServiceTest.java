@@ -168,6 +168,51 @@ class PaymentServiceTest {
         }
 
         @Test
+        void aLinkBeingCreatedByAnotherRequest_isWaitedFor_andReturned() {
+            // Arrange: the first request has saved the payment but not its link yet; it appears on the next read
+            orderIs("PENDING_PAYMENT");
+            Payment beingCreated = payment(PaymentStatus.CREATED);
+            beingCreated.setPaymentUrl(null);
+            beingCreated.setCreatedAt(NOW.minusSeconds(1));
+            Payment withLink = payment(PaymentStatus.CREATED);
+            withLink.setId(beingCreated.getId());
+            when(paymentRepository.findByOrderIdAndStatus(ORDER_ID, PaymentStatus.CREATED)).thenReturn(Optional.of(beingCreated));
+            when(paymentRepository.findById(beingCreated.getId())).thenReturn(Optional.of(withLink));
+
+            // Act
+            PaymentService.StartedPayment started = paymentService.startPayment(CUSTOMER, ORDER_ID, null);
+
+            // Assert: the same payment and link, nothing new created
+            assertFalse(started.created());
+            assertEquals("https://rzp.io/i/Test", started.payment().paymentUrl());
+            verifyNoInteractions(gatewaySelector);
+        }
+
+        @Test
+        void aPaymentLeftWithoutALinkLongAgo_isClosed_andANewOneStarts() {
+            // Arrange: created 10 minutes ago, never got a link (its request failed half way)
+            orderIs("PENDING_PAYMENT");
+            Payment abandoned = payment(PaymentStatus.CREATED);
+            abandoned.setPaymentUrl(null);
+            abandoned.setGateway(null);
+            abandoned.setCreatedAt(NOW.minus(Duration.ofMinutes(10)));
+            when(paymentRepository.findByOrderIdAndStatus(ORDER_ID, PaymentStatus.CREATED)).thenReturn(Optional.of(abandoned));
+            when(paymentRepository.finish(abandoned.getId(), PaymentStatus.FAILED, null)).thenReturn(1);
+            when(paymentRepository.existsByOrderIdAndStatus(ORDER_ID, PaymentStatus.CREATED)).thenReturn(false);
+            when(gatewaySelector.candidates(null)).thenReturn(List.of(razorpay));
+            when(razorpay.createLink(any())).thenReturn(new GatewayLink("plink_New", "https://rzp.io/i/New"));
+            when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            // Act
+            PaymentService.StartedPayment started = paymentService.startPayment(CUSTOMER, ORDER_ID, null);
+
+            // Assert
+            verify(paymentRepository).finish(abandoned.getId(), PaymentStatus.FAILED, null);
+            assertTrue(started.created());
+            assertEquals("https://rzp.io/i/New", started.payment().paymentUrl());
+        }
+
+        @Test
         void orderThatIsNotWaitingForPayment_cannotBePaid() {
             orderIs("CONFIRMED");
 

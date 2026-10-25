@@ -187,6 +187,10 @@ class PaymentFlowIT {
         assertEquals("EXPIRED", paymentRepository.findById(paymentId).orElseThrow().getStatus().name());
         assertEquals(List.of("CREATED/API", "CREATED/API", "EXPIRED/ORDER_EVENT"), history(paymentId));
         assertEquals("EXPIRED", fakeGateway.fetchStatus("fake_" + paymentId).outcome().name());
+        // and the closed link can no longer be paid
+        int status = http.get().uri("/fake-gateway/checkout/fake_{id}/complete?result=success", paymentId)
+                .exchange((request, response) -> response.getStatusCode().value());
+        assertEquals(404, status);
     }
 
     @Test

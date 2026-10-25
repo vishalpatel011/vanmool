@@ -89,7 +89,8 @@ public class FakeGateway implements PaymentGateway {
     // to this service's own webhook endpoint, as a real gateway would
     public Optional<UUID> complete(String reference, boolean success) {
         Checkout checkout = checkouts.get(reference);
-        if (checkout == null) {
+        // Like a real gateway, a link that was closed or already finished cannot be paid
+        if (checkout == null || checkout.outcome() != GatewayOutcome.PENDING) {
             return Optional.empty();
         }
         GatewayOutcome outcome = success ? GatewayOutcome.PAID : GatewayOutcome.FAILED;

@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice
@@ -36,5 +37,14 @@ public class GlobalExceptionHandler {
         errorDto.setStatus("Failure");
         errorDto.setMessage(e.getMessage());
         return new ResponseEntity<>(errorDto, HttpStatus.NOT_FOUND );
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorDto> handleInvalidArgument(MethodArgumentTypeMismatchException e) {
+        // For example /products/abc, where the id is not a valid UUID
+        ErrorDto errorDto = new ErrorDto();
+        errorDto.setStatus("Failure");
+        errorDto.setMessage("Invalid value for '" + e.getName() + "'");
+        return new ResponseEntity<>(errorDto, HttpStatus.BAD_REQUEST);
     }
 }

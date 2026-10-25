@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 public class ProductController {
@@ -35,7 +36,7 @@ public class ProductController {
     }
 
     @GetMapping("/products/{id}")
-    public ProductResponseDto getProductById(@PathVariable("id") long id) throws ProductNotFoundException {
+    public ProductResponseDto getProductById(@PathVariable("id") UUID id) throws ProductNotFoundException {
         Product product = productService.getProductById(id);
         return ProductResponseDto.from(product);
     }
@@ -51,7 +52,7 @@ public class ProductController {
     }
 
     @PutMapping("/products/{id}")
-    public ProductResponseDto replaceProduct(@PathVariable("id") long id, @RequestBody ProductRequestDto productRequestDto) throws ProductNotFoundException {
+    public ProductResponseDto replaceProduct(@PathVariable("id") UUID id, @RequestBody ProductRequestDto productRequestDto) throws ProductNotFoundException {
         Product product = productService.replaceProduct(
                 id,
                 productRequestDto.getName(),
@@ -62,13 +63,13 @@ public class ProductController {
     }
 
     @PatchMapping(value = "/products/{id}", consumes = "application/json-patch+json")
-    public ProductResponseDto patchProduct(@PathVariable("id") long id, @RequestBody JsonPatch jsonPatch) throws ProductNotFoundException, JsonPatchException, JsonProcessingException {
+    public ProductResponseDto patchProduct(@PathVariable("id") UUID id, @RequestBody JsonPatch jsonPatch) throws ProductNotFoundException, JsonPatchException, JsonProcessingException {
         Product product = productService.patchProduct(id, jsonPatch);
         return ProductResponseDto.from(product);
     }
 
     @DeleteMapping("/products/{id}")
-    public ResponseEntity<Void> deleteProduct(@PathVariable("id") long id) throws ProductNotFoundException {
+    public ResponseEntity<Void> deleteProduct(@PathVariable("id") UUID id) throws ProductNotFoundException {
         productService.deleteProduct(id);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }

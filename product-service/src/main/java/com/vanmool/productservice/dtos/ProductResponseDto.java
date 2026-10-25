@@ -4,10 +4,12 @@ import com.vanmool.productservice.models.Product;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.UUID;
+
 @Getter
 @Setter
 public class ProductResponseDto {
-    private long id;
+    private UUID id;
     private String name;
     private double price;
     private String description;

@@ -18,8 +18,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
@@ -136,7 +138,7 @@ class ProductControllerTest {
     }
 
     @Test
-    void createProduct_passesTheRequestToTheServiceAndAnswers201() {
+    void createProduct_passesTheRequestToTheServiceAndAnswers201WithTheLocation() {
         // Arrange
         ProductRequestDto request = new ProductRequestDto();
         request.setName("Ragi Biscuits");
@@ -149,12 +151,14 @@ class ProductControllerTest {
                 new BigDecimal("120.00"), "https://example.com/images/ragi-biscuits.jpg", "Natural Foods"))
                 .thenReturn(created);
 
-        // Act
-        ResponseEntity<ProductResponseDto> response = productController.createProduct(request);
+        // Act: outside a real request, the test supplies the base URL Spring would otherwise take from the request
+        ResponseEntity<ProductResponseDto> response = productController.createProduct(request,
+                UriComponentsBuilder.fromUriString("http://localhost:8080"));
 
         // Assert
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertEquals(created.getId(), response.getBody().getId());
+        assertEquals(URI.create("http://localhost:8080/products/" + created.getId()), response.getHeaders().getLocation());
     }
 
     @Test

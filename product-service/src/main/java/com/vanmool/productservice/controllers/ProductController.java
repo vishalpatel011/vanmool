@@ -12,7 +12,9 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -46,13 +48,17 @@ public class ProductController {
     }
 
     @PostMapping("/products")
-    public ResponseEntity<ProductResponseDto> createProduct(@Valid @RequestBody ProductRequestDto productRequestDto) {
+    public ResponseEntity<ProductResponseDto> createProduct(@Valid @RequestBody ProductRequestDto productRequestDto,
+                                                            UriComponentsBuilder uriComponentsBuilder) {
         Product product = productService.createProduct(productRequestDto.getName(),
                                                         productRequestDto.getDescription(),
                                                         productRequestDto.getPrice(),
                                                         productRequestDto.getImageUrl(),
                                                         productRequestDto.getCategory());
-        return new ResponseEntity<>(ProductResponseDto.from(product), HttpStatus.CREATED);
+        // 201 Created says where the new product lives: Location: http://host/products/{id}.
+        // Spring fills the builder with the scheme, host and port of the current request.
+        URI location = uriComponentsBuilder.path("/products/{id}").buildAndExpand(product.getId()).toUri();
+        return ResponseEntity.created(location).body(ProductResponseDto.from(product));
     }
 
     @PutMapping("/products/{id}")

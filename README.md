@@ -179,7 +179,7 @@ The product service listens on `http://localhost:8080`.
 | GET | `/products` | 200, list of products | |
 | GET | `/products?category={name}` | 200, the products in that category (empty list if none) | |
 | GET | `/products/{id}` | 200, the product | 400 invalid id, 404 product not found |
-| POST | `/products` | 201, the created product | 400 invalid request body |
+| POST | `/products` | 201, the created product, with `Location: /products/{id}` | 400 invalid request body |
 | PUT | `/products/{id}` | 200, the replaced product | 400 invalid id or request body, 404 product not found |
 | PATCH | `/products/{id}` | 200, the patched product | 400 invalid id, patch or patched product, 404 product not found |
 | DELETE | `/products/{id}` | 204, no body | 400 invalid id, 404 product not found |

@@ -1,5 +1,6 @@
 package com.vanmool.productservice.services;
 
+import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
@@ -9,24 +10,31 @@ import com.vanmool.productservice.repositories.ProductRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Validator;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class ProductDbService implements ProductService{
     private final CategoryRepository categoryRepository;
     private final ProductRepository productRepository;
+    private final Validator validator;
 
-    public ProductDbService(CategoryRepository categoryRepository, ProductRepository productRepository) {
+    public ProductDbService(CategoryRepository categoryRepository, ProductRepository productRepository, Validator validator) {
         this.categoryRepository = categoryRepository;
         this.productRepository = productRepository;
+        this.validator = validator;
     }
 
     @Override
@@ -69,7 +77,16 @@ public class ProductDbService implements ProductService{
         ObjectMapper objectMapper = new ObjectMapper();
         JsonNode productNode = objectMapper.valueToTree(ProductResponseDto.from(existingProduct));
         JsonNode patchedNode = patch.apply(productNode);
-        ProductResponseDto patchedProduct = objectMapper.treeToValue(patchedNode, ProductResponseDto.class);
+
+        // A patch cannot change the id; everything else must pass the same rules as a POST or PUT body
+        if(patchedNode instanceof ObjectNode objectNode) {
+            objectNode.remove("id");
+        }
+        ProductRequestDto patchedProduct = objectMapper.treeToValue(patchedNode, ProductRequestDto.class);
+        Set<ConstraintViolation<ProductRequestDto>> violations = validator.validate(patchedProduct);
+        if(!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
 
         buildProduct(existingProduct,
                 patchedProduct.getName(),

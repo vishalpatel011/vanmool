@@ -8,6 +8,7 @@ import com.vanmool.productservice.services.ProductService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -42,7 +43,7 @@ public class ProductController {
     }
 
     @PostMapping("/products")
-    public ResponseEntity<ProductResponseDto> createProduct(@RequestBody ProductRequestDto productRequestDto) {
+    public ResponseEntity<ProductResponseDto> createProduct(@Valid @RequestBody ProductRequestDto productRequestDto) {
         Product product = productService.createProduct(productRequestDto.getName(),
                                                         productRequestDto.getDescription(),
                                                         productRequestDto.getPrice(),
@@ -52,7 +53,7 @@ public class ProductController {
     }
 
     @PutMapping("/products/{id}")
-    public ProductResponseDto replaceProduct(@PathVariable("id") UUID id, @RequestBody ProductRequestDto productRequestDto) throws ProductNotFoundException {
+    public ProductResponseDto replaceProduct(@PathVariable("id") UUID id, @Valid @RequestBody ProductRequestDto productRequestDto) throws ProductNotFoundException {
         Product product = productService.replaceProduct(
                 id,
                 productRequestDto.getName(),

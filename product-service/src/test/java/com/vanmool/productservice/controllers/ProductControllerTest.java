@@ -147,9 +147,7 @@ class ProductControllerTest {
         request.setImageUrl("https://example.com/images/ragi-biscuits.jpg");
         request.setCategory("Natural Foods");
         Product created = product("Ragi Biscuits", "Natural Foods");
-        when(productService.createProduct("Ragi Biscuits", "Baked with finger millet from Gujarat",
-                new BigDecimal("120.00"), "https://example.com/images/ragi-biscuits.jpg", "Natural Foods"))
-                .thenReturn(created);
+        when(productService.createProduct(request)).thenReturn(created);
 
         // Act: outside a real request, the test supplies the base URL Spring would otherwise take from the request
         ResponseEntity<ProductResponseDto> response = productController.createProduct(request,
@@ -162,8 +160,8 @@ class ProductControllerTest {
     }
 
     @Test
-    void replaceProduct_passesEveryRequestFieldInTheRightPlace() throws ProductNotFoundException {
-        // Arrange: every field has a different value, so two swapped arguments would not match the stub
+    void replaceProduct_passesTheRequestToTheServiceAndMapsTheResult() throws ProductNotFoundException {
+        // Arrange: the controller hands the validated request object to the service unchanged
         ProductRequestDto request = new ProductRequestDto();
         request.setName("Warli Painted Basket");
         request.setPrice(new BigDecimal("650.00"));
@@ -172,9 +170,7 @@ class ProductControllerTest {
         request.setCategory("Tribal Art");
         Product replaced = product("Warli Painted Basket", "Tribal Art");
         replaced.setId(PRODUCT_ID);
-        when(productService.replaceProduct(PRODUCT_ID, "Warli Painted Basket", "Painted with Warli motifs",
-                new BigDecimal("650.00"), "https://example.com/images/warli-basket.jpg", "Tribal Art"))
-                .thenReturn(replaced);
+        when(productService.replaceProduct(PRODUCT_ID, request)).thenReturn(replaced);
 
         // Act
         ProductResponseDto response = productController.replaceProduct(PRODUCT_ID, request);

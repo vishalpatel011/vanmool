@@ -50,11 +50,7 @@ public class ProductController {
     @PostMapping("/products")
     public ResponseEntity<ProductResponseDto> createProduct(@Valid @RequestBody ProductRequestDto productRequestDto,
                                                             UriComponentsBuilder uriComponentsBuilder) {
-        Product product = productService.createProduct(productRequestDto.getName(),
-                                                        productRequestDto.getDescription(),
-                                                        productRequestDto.getPrice(),
-                                                        productRequestDto.getImageUrl(),
-                                                        productRequestDto.getCategory());
+        Product product = productService.createProduct(productRequestDto);
         // 201 Created says where the new product lives: Location: http://host/products/{id}.
         // Spring fills the builder with the scheme, host and port of the current request.
         URI location = uriComponentsBuilder.path("/products/{id}").buildAndExpand(product.getId()).toUri();
@@ -63,12 +59,7 @@ public class ProductController {
 
     @PutMapping("/products/{id}")
     public ProductResponseDto replaceProduct(@PathVariable("id") UUID id, @Valid @RequestBody ProductRequestDto productRequestDto) throws ProductNotFoundException {
-        Product product = productService.replaceProduct(
-                id,
-                productRequestDto.getName(),
-                productRequestDto.getDescription(), productRequestDto.getPrice(),
-                productRequestDto.getImageUrl(),
-                productRequestDto.getCategory());
+        Product product = productService.replaceProduct(id, productRequestDto);
         return ProductResponseDto.from(product);
     }
 

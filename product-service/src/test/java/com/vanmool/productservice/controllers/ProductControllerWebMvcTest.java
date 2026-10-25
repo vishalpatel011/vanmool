@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
@@ -30,6 +31,7 @@ import java.util.stream.Stream;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -195,10 +197,7 @@ class ProductControllerWebMvcTest {
         @Test
         void validBody_returns201WithTheProductAndItsLocation() throws Exception {
             // Arrange
-            when(productService.createProduct("Handcrafted Bamboo Basket",
-                    "Woven by hand from local bamboo in Dangs, Gujarat", new BigDecimal("499.99"),
-                    "https://example.com/images/bamboo-basket.jpg", "Traditional Crafts"))
-                    .thenReturn(bambooBasket());
+            when(productService.createProduct(any(ProductRequestDto.class))).thenReturn(bambooBasket());
 
             // Act & Assert
             mockMvc.perform(post("/products").contentType(MediaType.APPLICATION_JSON).content(VALID_REQUEST))
@@ -207,6 +206,14 @@ class ProductControllerWebMvcTest {
                     .andExpect(jsonPath("$.id").value(PRODUCT_ID.toString()))
                     .andExpect(jsonPath("$.name").value("Handcrafted Bamboo Basket"))
                     .andExpect(jsonPath("$.category").value("Traditional Crafts"));
+
+            // Assert what Spring built from the JSON body: the captor catches the request object the service got
+            ArgumentCaptor<ProductRequestDto> received = ArgumentCaptor.forClass(ProductRequestDto.class);
+            verify(productService).createProduct(received.capture());
+            assertEquals("Handcrafted Bamboo Basket", received.getValue().getName());
+            assertEquals(new BigDecimal("499.99"), received.getValue().getPrice());
+            assertEquals("https://example.com/images/bamboo-basket.jpg", received.getValue().getImageUrl());
+            assertEquals("Traditional Crafts", received.getValue().getCategory());
         }
 
         @Test
@@ -278,10 +285,7 @@ class ProductControllerWebMvcTest {
         @Test
         void validBody_returns200WithTheReplacedProduct() throws Exception {
             // Arrange
-            when(productService.replaceProduct(PRODUCT_ID, "Handcrafted Bamboo Basket",
-                    "Woven by hand from local bamboo in Dangs, Gujarat", new BigDecimal("499.99"),
-                    "https://example.com/images/bamboo-basket.jpg", "Traditional Crafts"))
-                    .thenReturn(bambooBasket());
+            when(productService.replaceProduct(eq(PRODUCT_ID), any(ProductRequestDto.class))).thenReturn(bambooBasket());
 
             // Act & Assert
             mockMvc.perform(put("/products/{id}", PRODUCT_ID).contentType(MediaType.APPLICATION_JSON).content(VALID_REQUEST))
@@ -293,7 +297,7 @@ class ProductControllerWebMvcTest {
         @Test
         void unknownId_returns404() throws Exception {
             // Arrange: PUT never creates a product at a client-chosen id
-            when(productService.replaceProduct(eq(PRODUCT_ID), any(), any(), any(), any(), any()))
+            when(productService.replaceProduct(eq(PRODUCT_ID), any(ProductRequestDto.class)))
                     .thenThrow(new ProductNotFoundException("Product with id " + PRODUCT_ID + " not found"));
 
             // Act & Assert

@@ -80,6 +80,8 @@ Target architecture (services are added one at a time; the table below shows wha
 | Bean Validation (Hibernate Validator) | Request validation | In use |
 | json-patch | JSON Patch support for `PATCH` requests | In use |
 | Lombok | Boilerplate reduction | In use |
+| JUnit 5, Mockito | Unit tests with mocked dependencies | In use |
+| JaCoCo | Code coverage report | In use |
 | Maven (wrapper included) | Build | In use |
 | Spring Security, JWT, BCrypt, OAuth2 | Authentication and authorization | Planned |
 | Redis | Product cache and cart storage | Planned |
@@ -156,8 +158,9 @@ Never commit real credentials. `.env` is git-ignored for this reason.
 ### 3. Build and test
 
 ```
-./mvnw verify          # Git Bash, macOS, Linux
-.\mvnw.cmd verify      # Windows PowerShell or cmd
+./mvnw test            # unit tests only: fast, no database needed
+./mvnw verify          # unit tests, then integration tests against MySQL (Git Bash, macOS, Linux)
+.\mvnw.cmd verify      # the same from Windows PowerShell or cmd
 ```
 
 To build a single service: `./mvnw -pl product-service verify`.
@@ -251,7 +254,16 @@ Every error, including the ones Spring itself raises (unknown path, wrong method
 
 ## Testing
 
-The product service currently has one Spring Boot test that starts the full application context, so it needs a running MySQL. Unit tests for the service layer and MockMvc controller tests with JSON assertions are the next part of the roadmap.
+Tests follow the testing pyramid: many fast unit tests, a few slower integration tests.
+
+| Kind | Naming | Runs in | Needs | What it covers |
+|---|---|---|---|---|
+| Unit tests | `*Test` | `./mvnw test` (Maven Surefire) | Only the JVM | Services and controllers as plain Java classes, with their dependencies replaced by Mockito mocks |
+| Integration tests | `*IT` | `./mvnw verify` (Maven Failsafe) | A running MySQL (`DB_URL`) | The whole application starting against the database: Flyway's migrations apply and Hibernate accepts the schema |
+
+Unit tests use JUnit 5 and Mockito, follow Arrange-Act-Assert, and sit in packages that mirror the main code (`services/ProductDbServiceTest` tests `services/ProductDbService`). They cover the happy path, edge cases and failure cases of each business rule: a `PUT` never creates a product, a `PATCH` cannot change the id and must still pass validation, a delete only sets the `deleted` flag, and finding or creating a category recovers when two requests create the same new name at once.
+
+`./mvnw test` also writes a JaCoCo code coverage report to `product-service/target/site/jacoco/index.html`. Lombok-generated getters and setters are left out of it (`product-service/lombok.config`).
 
 ## Roadmap
 
@@ -265,7 +277,8 @@ The product service currently has one Spring Boot test that starts the full appl
 - [x] Database migrations with Flyway
 - [x] Derived query methods, JPQL queries and DTO projections
 - [x] Fetch types: LAZY associations, entity graphs instead of N+1 queries, transactional writes, open-in-view off
-- [ ] Unit tests, MockMvc controller tests, JSON assertions, test doubles
+- [x] Unit tests with JUnit 5 and Mockito, unit and integration tests run separately, JaCoCo coverage
+- [ ] MockMvc controller tests, JSON assertions
 - [ ] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
 - [ ] Redis: product caching and cart storage

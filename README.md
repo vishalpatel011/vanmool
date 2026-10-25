@@ -263,6 +263,34 @@ Every error, including the ones Spring itself raises (unknown path, wrong method
 | `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, ... | 404, 405, 415, ... | Errors raised by Spring before a controller runs; the code is the HTTP status name |
 | `INTERNAL_ERROR` | 500 | An unexpected server error. The details are logged on the server, never sent to the client |
 
+## User Auth Service API
+
+The user-auth service (port 8081) owns user accounts. It never stores or returns a password: only a BCrypt hash is kept.
+
+| Method | Path | Success | Errors |
+|---|---|---|---|
+| POST | `/auth/signup` | 201, the new user | 400 invalid request body, 409 email already registered |
+
+Request body for `POST /auth/signup`:
+
+```json
+{ "name": "Asha Gamit", "email": "asha@example.com", "password": "correct horse battery" }
+```
+
+| Field | Rules |
+|---|---|
+| `name` | required, not blank, at most 100 characters |
+| `email` | required, a valid email address, at most 255 characters; stored in lower case, so one address is one account |
+| `password` | required, at least 8 characters and at most 72 bytes (BCrypt's limit; a Gujarati or Hindi letter takes 3 bytes) |
+
+Response, without the password:
+
+```json
+{ "id": "5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10", "name": "Asha Gamit", "email": "asha@example.com", "roles": ["CUSTOMER"] }
+```
+
+Every new account has the `CUSTOMER` role. Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`), with the code `EMAIL_ALREADY_REGISTERED` for a duplicate email.
+
 ## Testing
 
 Tests follow the testing pyramid: many fast unit tests, a few slower integration tests.

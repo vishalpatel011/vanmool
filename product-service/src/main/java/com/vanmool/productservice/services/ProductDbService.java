@@ -53,6 +53,11 @@ public class ProductDbService implements ProductService{
     }
 
     @Override
+    public List<Product> getProductsByCategory(String categoryName) {
+        return productRepository.findAllByCategory_NameAndDeletedFalse(categoryName);
+    }
+
+    @Override
     public Product createProduct(String name, String description, BigDecimal price,  String imageUrl, String category) {
         Product product = new Product();
         buildProduct(product,name, description, price, imageUrl, category);

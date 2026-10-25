@@ -26,8 +26,11 @@ public class ProductController {
     }
 
     @GetMapping("/products")
-    public List<ProductResponseDto> getAllProducts(){
-        List<Product> products = productService.getAllProducts();
+    public List<ProductResponseDto> getAllProducts(@RequestParam(value = "category", required = false) String category){
+        // GET /products?category=Natural Foods lists one category; without it (or left empty), every product
+        List<Product> products = (category == null || category.isBlank())
+                ? productService.getAllProducts()
+                : productService.getProductsByCategory(category);
         //List<ProductResponseDto> productResponseDtos = products.stream().map(ProductResponseDto::from).toList();
         List<ProductResponseDto> productResponseDtos = new ArrayList<>();
         for(Product product : products){

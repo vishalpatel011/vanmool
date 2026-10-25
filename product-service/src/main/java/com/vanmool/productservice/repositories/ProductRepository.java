@@ -12,4 +12,9 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     Optional<Product> findByIdAndDeletedFalse(UUID id);
 
     List<Product> findAllByDeletedFalse();
+
+    // "Category_Name" walks Product.category to Category.name, so Spring Data joins the category table;
+    // the underscore makes that path explicit instead of leaving Spring Data to guess where the property splits.
+    // The column's MySQL collation is case-insensitive, so "natural foods" matches "Natural Foods".
+    List<Product> findAllByCategory_NameAndDeletedFalse(String categoryName);
 }

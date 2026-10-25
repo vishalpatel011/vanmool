@@ -13,6 +13,7 @@ import java.util.UUID;
 public interface ProductService {
     Product getProductById(UUID id) throws ProductNotFoundException;
     List<Product> getAllProducts();
+    List<Product> getProductsByCategory(String categoryName);
     Product createProduct(String name, String description, BigDecimal price,String imageUrl, String category);
     Product replaceProduct(UUID id, String name, String description, BigDecimal price, String imageUrl, String category) throws ProductNotFoundException;
     Product patchProduct(UUID id, JsonPatch patch) throws ProductNotFoundException, JsonPatchException, JsonProcessingException;

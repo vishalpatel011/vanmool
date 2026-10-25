@@ -59,7 +59,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | Service | Responsibility | Storage | Status |
 |---|---|---|---|
 | `product-service` | Product catalog: products, categories, search, pagination | MySQL (`product_db`) | In progress |
-| `user-auth-service` | Signup, login, password hashing, JWT, roles | MySQL | Planned |
+| `user-auth-service` | Signup, login, password hashing, JWT, roles | MySQL (`user_db`) | In progress |
 | `inventory-service` | Stock levels, reservation and release | MySQL | Planned |
 | `cart-service` | Shopping carts | Redis | Planned |
 | `order-service` | Orders and the order lifecycle | MySQL | Planned |
@@ -99,6 +99,7 @@ vanmool/
 ├── mvnw, mvnw.cmd       Maven wrapper
 ├── .mvn/
 ├── .env.example         environment variables the services read
+├── user-auth-service/   accounts, login and tokens (same layout as product-service)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
@@ -116,7 +117,7 @@ vanmool/
         └── test/
 ```
 
-Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xml` only lists the services as modules, so one command builds all of them.
+Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xml` only lists the services as modules, so one command builds all of them, and each service can still be built, packaged and deployed on its own.
 
 ## Getting started
 
@@ -130,27 +131,34 @@ Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xm
 
 Run as a MySQL administrator, using your own user name and password:
 
+Each service has its own database and its own database user, which can reach only that database:
+
 ```sql
 CREATE DATABASE product_db;
 CREATE USER 'vanmool_user'@'localhost' IDENTIFIED BY 'choose-a-password';
 GRANT ALL PRIVILEGES ON product_db.* TO 'vanmool_user'@'localhost';
+
+CREATE DATABASE user_db;
+CREATE USER 'vanmool_auth_user'@'localhost' IDENTIFIED BY 'choose-another-password';
+GRANT ALL PRIVILEGES ON user_db.* TO 'vanmool_auth_user'@'localhost';
 ```
 
-The tables are created by Flyway, not by hand and not by Hibernate. On startup Flyway applies every script in `product-service/src/main/resources/db/migration` that the database has not seen yet, and records it in the `flyway_schema_history` table. Hibernate then only checks that the tables match the entities (`spring.jpa.hibernate.ddl-auto=validate`) and stops the application if they do not.
+The tables are created by Flyway, not by hand and not by Hibernate. On startup Flyway applies every script in the service's `src/main/resources/db/migration` that the database has not seen yet, and records it in the `flyway_schema_history` table. Hibernate then only checks that the tables match the entities (`spring.jpa.hibernate.ddl-auto=validate`) and stops the application if they do not.
 
 A schema change is always a new script with the next version number, named `V<version>__<description>.sql` (for example `V1__create_category_and_product_tables.sql`). A script that has already been applied is never edited: Flyway stores a checksum of each script and refuses to start if an applied one changes.
 
 ### 2. Set the environment variables
 
-The product service reads its database connection from the environment. `.env.example` lists the variables:
+Each service reads its settings from the environment of its own process, so the same variable names are used by every service. `.env.example` lists them:
 
-| Variable | Description | Default |
-|---|---|---|
-| `DB_URL` | JDBC URL of the product database | `jdbc:mysql://localhost:3306/product_db` |
-| `DB_USERNAME` | Database user | `ProductService_user` |
-| `DB_PASSWORD` | Database password | empty |
+| Variable | Description | product-service default | user-auth-service default |
+|---|---|---|---|
+| `DB_URL` | JDBC URL of the service's database | `jdbc:mysql://localhost:3306/product_db` | `jdbc:mysql://localhost:3306/user_db` |
+| `DB_USERNAME` | Database user | `ProductService_user` | `UserAuthService_user` |
+| `DB_PASSWORD` | Database password | empty | empty |
+| `SERVER_PORT` | HTTP port | `8080` | `8081` |
 
-- **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
+- **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
 - **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
 
 Never commit real credentials. `.env` is git-ignored for this reason.
@@ -163,14 +171,14 @@ Never commit real credentials. `.env` is git-ignored for this reason.
 .\mvnw.cmd verify      # the same from Windows PowerShell or cmd
 ```
 
-To build a single service: `./mvnw -pl product-service verify`.
+To build a single service: `./mvnw -pl product-service verify` or `./mvnw -pl user-auth-service verify`.
 
 ### 4. Run
 
-- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`.
-- **Command line:** `./mvnw -pl product-service spring-boot:run`
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication` or `UserAuthServiceApplication`.
+- **Command line:** `./mvnw -pl product-service spring-boot:run` or `./mvnw -pl user-auth-service spring-boot:run`
 
-The product service listens on `http://localhost:8080`.
+The product service listens on `http://localhost:8080` and the user-auth service on `http://localhost:8081`, so both can run at once.
 
 ## Product Service API
 

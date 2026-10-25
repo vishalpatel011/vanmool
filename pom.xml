@@ -14,5 +14,6 @@
 
     <modules>
         <module>product-service</module>
+        <module>user-auth-service</module>
     </modules>
 </project>

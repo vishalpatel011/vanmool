@@ -4,6 +4,7 @@ import com.vanmool.productservice.models.Product;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Getter
@@ -11,7 +12,7 @@ import java.util.UUID;
 public class ProductResponseDto {
     private UUID id;
     private String name;
-    private double price;
+    private BigDecimal price;
     private String description;
     private String imageUrl;
     private String category;

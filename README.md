@@ -83,7 +83,9 @@ Target architecture (services are added one at a time; the table below shows wha
 | JUnit 5, Mockito | Unit tests with mocked dependencies | In use |
 | JaCoCo | Code coverage report | In use |
 | Maven (wrapper included) | Build | In use |
-| Spring Security, JWT, BCrypt, OAuth2 | Authentication and authorization | Planned |
+| Spring Security, BCrypt | Password hashing, authentication and authorization | In use |
+| JWT (JJWT, RS256) | Signed login tokens | In use |
+| Spring Authorization Server | OAuth2 / OpenID Connect authorization code flow with PKCE | In use |
 | Redis | Product cache and cart storage | Planned |
 | Apache Kafka | Domain events between services | Planned |
 | Spring Cloud Gateway, Eureka, RestTemplate | Routing, service discovery and calls between services | Planned |
@@ -273,6 +275,8 @@ The user-auth service (port 8081) owns user accounts. It never stores or returns
 | POST | `/auth/login` | 200, a bearer token and its expiry | 400 invalid request body, 401 email or password incorrect |
 | POST | `/auth/logout` | 204, the token stops working | 401 missing or malformed `Authorization` header |
 | GET | `/auth/validate` | 200, the token's user | 401 token missing, invalid, expired or revoked |
+| GET | `/users/me` | 200, the signed-in user | 401 token missing, invalid, expired or revoked |
+| PUT | `/users/{id}/roles/{role}` | 200, the user with the role added (ADMIN only) | 400 unknown role, 401 no valid token, 403 not an ADMIN, 404 user not found |
 
 Request body for `POST /auth/signup`:
 
@@ -300,11 +304,39 @@ Every new account has the `CUSTOMER` role.
 { "token": "5m9ew8_eJUU4RFqV69tOEITqm-Fa7SwkZi4ToZLFsZ0", "tokenType": "Bearer", "expiresAt": "2026-10-25T22:03:30Z" }
 ```
 
-The client sends the token on later requests as `Authorization: Bearer <token>` (for `/auth/logout` and `/auth/validate`). The token is a JWT signed with HS256: its payload carries the issuer, the user's id (`sub`), the token's id (`jti`), email, roles, and issue and expiry times. Tokens are valid for 10 hours (`auth.token-validity`) unless the user logs out first: logout marks the token's `jti` as revoked, and `/auth/validate` refuses it from then on. The signing key comes from the `JWT_SECRET` environment variable (Base64 of at least 32 random bytes, for example from `openssl rand -base64 32`); every instance must use the same key. Without it the service signs with a random key made at startup, which is only suitable for local development: tokens stop working when it restarts.
+The client sends the token on later requests as `Authorization: Bearer <token>`. The token is a JWT signed with RS256: its header names the signing key (`kid`), and its payload carries the issuer, the user's id (`sub`), the token's id (`jti`), email, roles, and issue and expiry times. Tokens are valid for 10 hours (`auth.token-validity`) unless the user logs out first: logout marks the token's `jti` as revoked, and both `/auth/validate` and protected endpoints such as `/users/me` refuse it from then on.
 
-A wrong password and an unknown email get the same `401 INVALID_CREDENTIALS` answer, after the same BCrypt work, so the API does not reveal which emails have accounts.
+Passwords are checked by Spring Security (a `UserDetailsService` that reads `user_db`, and the BCrypt `PasswordEncoder`). A wrong password and an unknown email get the same `401 INVALID_CREDENTIALS` answer, after the same BCrypt work, so the API does not reveal which emails have accounts.
 
-Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `VALIDATION_FAILED` and `MALFORMED_REQUEST` (400).
+Roles: every new account is a `CUSTOMER`. An `ADMIN` can grant `SELLER` (for producers who list products) or `ADMIN` with `PUT /users/{id}/roles/{role}`. The first administrator is made directly in the database:
+
+```sql
+INSERT INTO user_role (user_id, role) SELECT id, 'ADMIN' FROM users WHERE email = 'admin@example.com';
+```
+
+Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `FORBIDDEN` (403), `USER_NOT_FOUND` (404), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
+
+### OAuth2 and OpenID Connect
+
+The service is also an OAuth2 Authorization Server with OpenID Connect (Spring Authorization Server), so an application can get tokens for a user without ever handling the user's password: the user signs in on this service's own page.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /.well-known/openid-configuration` | Discovery: the issuer and every endpoint below |
+| `GET /oauth2/authorize` | Starts the sign-in; sends a person who is not signed in to the form at `/login` |
+| `POST /oauth2/token` | Exchanges an authorization code for an access token and an ID token |
+| `GET /oauth2/jwks` | The public key (JWK set) that checks every token this service signs |
+| `GET /userinfo` | Who the access token belongs to (OpenID Connect) |
+
+One client is registered, `vanmool-web` (the future web or mobile front end). It is a public client, so it uses the authorization code flow with PKCE (`code_challenge_method=S256`); its redirect URIs are set by `WEB_CLIENT_REDIRECT_URIS`. Access tokens from `/oauth2/token` carry the same `sub`, `email` and `roles` claims as tokens from `POST /auth/login`, and both are signed with the same RSA key, so another service can check either kind with the public key from `/oauth2/jwks`.
+
+Configuration:
+
+| Variable | Description | Default |
+|---|---|---|
+| `JWT_PRIVATE_KEY` | RSA private key that signs all tokens, as a PKCS#8 PEM or its Base64 on one line (`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`). Every instance must use the same key | none: a key is generated at startup, for local development only (tokens stop working on restart) |
+| `AUTH_ISSUER` | The issuer written into tokens and published in the discovery document; the public URL in a deployment | `http://localhost:8081` |
+| `WEB_CLIENT_REDIRECT_URIS` | Comma-separated redirect URIs of `vanmool-web` | `http://127.0.0.1:3000/callback,https://oauth.pstmn.io/v1/callback` |
 
 ## Testing
 
@@ -336,7 +368,7 @@ Web layer tests check the JSON field by field with `jsonPath`, or against the wh
 - [x] Fetch types: LAZY associations, entity graphs instead of N+1 queries, transactional writes, open-in-view off
 - [x] Unit tests with JUnit 5 and Mockito, unit and integration tests run separately, JaCoCo coverage
 - [x] MockMvc web layer tests with JSON assertions
-- [ ] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2
+- [x] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2 / OpenID Connect
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
 - [ ] Redis: product caching and cart storage
 - [ ] Product search, pagination, sorting and filtering

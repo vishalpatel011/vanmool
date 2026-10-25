@@ -1,11 +1,15 @@
 package com.vanmool.userauthservice.controllers;
 
+import com.vanmool.userauthservice.configs.JwtConfig;
 import com.vanmool.userauthservice.configs.SecurityConfig;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
 import com.vanmool.userauthservice.exceptions.InvalidTokenException;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.User;
+import com.vanmool.userauthservice.repositories.TokenRepository;
+import com.vanmool.userauthservice.security.RestSecurityErrorHandler;
+import com.vanmool.userauthservice.security.RevokedTokenValidator;
 import com.vanmool.userauthservice.services.IssuedToken;
 import com.vanmool.userauthservice.services.UserService;
 import org.junit.jupiter.api.DisplayName;
@@ -39,12 +43,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// Web layer test: only Spring MVC and our SecurityConfig start (the @Import makes the test use the real security
-// rules, not Spring Boot's default ones); UserService is a mock.
+// Web layer test: only Spring MVC and our security setup start (the @Import makes the test use the real security
+// rules and JWT checking, not Spring Boot's defaults); UserService and TokenRepository are mocks.
 @WebMvcTest(AuthController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, RestSecurityErrorHandler.class, JwtConfig.class, RevokedTokenValidator.class})
 class AuthControllerWebMvcTest {
     private static final UUID USER_ID = UUID.fromString("5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10");
 
@@ -53,6 +58,9 @@ class AuthControllerWebMvcTest {
 
     @MockitoBean
     private UserService userService;
+
+    @MockitoBean
+    private TokenRepository tokenRepository;
 
     private static User asha() {
         User user = new User();
@@ -235,6 +243,42 @@ class AuthControllerWebMvcTest {
     }
 
     @Nested
+    @DisplayName("Errors outside the endpoints")
+    class OtherErrors {
+        @Test
+        void unknownPathUnderTheApi_returns404InTheSameErrorFormat() throws Exception {
+            // Act & Assert
+            mockMvc.perform(get("/auth/no-such-endpoint"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("NOT_FOUND"))
+                    .andExpect(jsonPath("$.path").value("/auth/no-such-endpoint"));
+        }
+
+        @Test
+        void wrongMethod_returns405WithTheAllowedMethod() throws Exception {
+            // Act & Assert
+            mockMvc.perform(get("/auth/login"))
+                    .andExpect(status().isMethodNotAllowed())
+                    .andExpect(header().string(HttpHeaders.ALLOW, "POST"))
+                    .andExpect(jsonPath("$.error").value("METHOD_NOT_ALLOWED"));
+        }
+
+        @Test
+        void unexpectedFailure_returns500WithoutInternalDetails() throws Exception {
+            // Arrange
+            when(userService.login(anyString(), anyString()))
+                    .thenThrow(new IllegalStateException("Connection refused: db-host:3306 for user admin"));
+
+            // Act & Assert: the details are only in the server log
+            mockMvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON).content("""
+                            { "email": "asha@example.com", "password": "correct horse battery" }"""))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.error").value("INTERNAL_ERROR"))
+                    .andExpect(content().string(not(containsString("db-host"))));
+        }
+    }
+
+    @Nested
     @DisplayName("Spring Security defaults")
     class SecurityDefaults {
         @Test
@@ -249,11 +293,25 @@ class AuthControllerWebMvcTest {
         }
 
         @Test
-        void defaultLoginPage_isSwitchedOff() throws Exception {
-            // Act & Assert: without formLogin().disable(), Spring Security would serve an HTML login form here
+        void signInFormOfTheOAuth2Flow_isServedOutsideTheApi() throws Exception {
+            // Act & Assert: /login belongs to the browser filter chain, where the OAuth2 authorization endpoint sends
+            // people to sign in; the API under /auth and /users has no form login
             mockMvc.perform(get("/login"))
-                    .andExpect(status().isNotFound())
-                    .andExpect(jsonPath("$.error").value("NOT_FOUND"));
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("<form")));
+        }
+
+        @Test
+        void apiAnswersWithoutCreatingAServerSession() throws Exception {
+            // Arrange
+            when(userService.signup(anyString(), anyString(), anyString())).thenReturn(asha());
+
+            // Act & Assert: the API is stateless, so no JSESSIONID cookie is set
+            mockMvc.perform(post("/auth/signup").contentType(MediaType.APPLICATION_JSON).content("""
+                            { "name": "Asha Gamit", "email": "asha@example.com", "password": "correct horse battery" }"""))
+                    .andExpect(status().isCreated())
+                    .andExpect(request().sessionAttributeDoesNotExist("SPRING_SECURITY_CONTEXT"))
+                    .andExpect(header().doesNotExist(HttpHeaders.SET_COOKIE));
         }
     }
 }

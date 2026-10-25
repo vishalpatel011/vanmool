@@ -3,13 +3,18 @@ package com.vanmool.userauthservice.services;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
 import com.vanmool.userauthservice.exceptions.InvalidTokenException;
+import com.vanmool.userauthservice.exceptions.UserNotFoundException;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.Token;
 import com.vanmool.userauthservice.models.User;
 import com.vanmool.userauthservice.repositories.TokenRepository;
 import com.vanmool.userauthservice.repositories.UserRepository;
+import com.vanmool.userauthservice.security.models.CustomUserDetails;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,27 +24,25 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
-import java.util.Optional;
 import java.util.UUID;
 
 @Service
 public class UserServiceImpl implements UserService {
-    // A BCrypt hash (cost 12) of a random value nobody knows. Login checks the password against it when the email is
-    // unknown, so that case takes as long as a wrong password and response times do not reveal which emails exist
-    private static final String UNKNOWN_USER_HASH = "$2a$12$rZSmHB3WppxfABBsK6.JLeCgmD/65w2.y2lpfo4UZYQCTRv2mqtE2";
-
     private final UserRepository userRepository;
     private final TokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
     private final Clock clock;
     private final Duration tokenValidity;
 
     public UserServiceImpl(UserRepository userRepository, TokenRepository tokenRepository, PasswordEncoder passwordEncoder,
-                           JwtService jwtService, Clock clock, @Value("${auth.token-validity}") Duration tokenValidity) {
+                           AuthenticationManager authenticationManager, JwtService jwtService, Clock clock,
+                           @Value("${auth.token-validity}") Duration tokenValidity) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.passwordEncoder = passwordEncoder;
+        this.authenticationManager = authenticationManager;
         this.jwtService = jwtService;
         this.clock = clock;
         this.tokenValidity = tokenValidity;
@@ -70,13 +73,14 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public IssuedToken login(String email, String password) {
-        Optional<User> userOptional = userRepository.findByEmail(normalizeEmail(email));
-        if(userOptional.isEmpty()) {
-            passwordEncoder.matches(password, UNKNOWN_USER_HASH);
-            throw new InvalidCredentialsException();
-        }
-        User user = userOptional.get();
-        if(!passwordEncoder.matches(password, user.getPasswordHash())) {
+        // Spring Security checks the password: CustomUserDetailsService finds the user, the PasswordEncoder compares
+        // BCrypt hashes. An unknown email and a wrong password end in the same exception, and for an unknown email the
+        // provider still spends one BCrypt comparison, so the response time does not reveal which emails exist.
+        CustomUserDetails user;
+        try {
+            user = (CustomUserDetails) authenticationManager.authenticate(
+                    UsernamePasswordAuthenticationToken.unauthenticated(normalizeEmail(email), password)).getPrincipal();
+        } catch (AuthenticationException e) {
             throw new InvalidCredentialsException();
         }
 
@@ -84,11 +88,13 @@ public class UserServiceImpl implements UserService {
         // Whole seconds, because that is all a JWT's iat and exp can hold
         Instant issuedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS);
         Token token = new Token();
-        token.setUser(user);
+        // A reference is enough for the foreign key; the user was loaded during authentication
+        token.setUser(userRepository.getReferenceById(user.getUserId()));
         token.setExpiresAt(issuedAt.plus(tokenValidity));
         Token savedToken = tokenRepository.save(token);
 
-        String jwt = jwtService.issue(user, savedToken.getId(), issuedAt, savedToken.getExpiresAt());
+        String jwt = jwtService.issue(user.getUserId(), user.getUsername(), user.getRoles(),
+                savedToken.getId(), issuedAt, savedToken.getExpiresAt());
         return new IssuedToken(jwt, savedToken.getExpiresAt());
     }
 
@@ -116,6 +122,20 @@ public class UserServiceImpl implements UserService {
                 .filter(token -> !token.isRevoked())
                 .map(Token::getUser)
                 .orElseThrow(InvalidTokenException::new);
+    }
+
+    @Override
+    public User getUser(UUID userId) {
+        return userRepository.findWithRolesById(userId).orElseThrow(() -> new UserNotFoundException(userId));
+    }
+
+    // Granting a role that the user already has changes nothing (roles are a set), so repeating the request is safe
+    @Override
+    @Transactional
+    public User grantRole(UUID userId, Role role) {
+        User user = getUser(userId);
+        user.getRoles().add(role);
+        return userRepository.save(user);
     }
 
     private static String normalizeEmail(String email) {

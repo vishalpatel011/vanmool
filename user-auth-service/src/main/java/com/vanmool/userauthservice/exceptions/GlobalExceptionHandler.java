@@ -11,6 +11,7 @@ import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.Instant;
 import java.util.stream.Collectors;
@@ -35,6 +36,17 @@ public class GlobalExceptionHandler {
         headers.set(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
         ErrorDto errorDto = toErrorDto(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", e.getMessage(), request);
         return new ResponseEntity<>(errorDto, headers, HttpStatus.UNAUTHORIZED);
+    }
+
+    @ExceptionHandler(UserNotFoundException.class)
+    public ResponseEntity<ErrorDto> handleUserNotFound(UserNotFoundException e, HttpServletRequest request) {
+        return buildError(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorDto> handleInvalidArgument(MethodArgumentTypeMismatchException e, HttpServletRequest request) {
+        // For example /users/abc/roles/SELLER (not a UUID) or /users/{id}/roles/OWNER (not a role)
+        return buildError(HttpStatus.BAD_REQUEST, "INVALID_PARAMETER", "Invalid value for '" + e.getName() + "'", request);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

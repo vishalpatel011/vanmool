@@ -11,4 +11,7 @@ public interface TokenRepository extends JpaRepository<Token, UUID> {
     // A valid token is answered with its user and roles, so they are fetched in the same query (open-in-view is off)
     @EntityGraph(attributePaths = {"user", "user.roles"})
     Optional<Token> findWithUserById(UUID id);
+
+    // One "select ... limit 1" for every request with a bearer token on a protected endpoint
+    boolean existsByIdAndRevokedTrue(UUID id);
 }

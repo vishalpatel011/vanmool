@@ -64,16 +64,53 @@ class AuthFlowIT {
         String token = (String) login.getBody().get("token");
         assertNotNull(token);
 
-        // The token is accepted and names its user
+        // The token is accepted by /auth/validate and, as a bearer JWT, by the protected /users/me
         ResponseEntity<Map> validate = callWithToken(HttpMethod.GET, "/auth/validate", token);
         assertEquals(HttpStatus.OK, validate.getStatusCode());
         assertEquals(email, validate.getBody().get("email"));
+        ResponseEntity<Map> me = callWithToken(HttpMethod.GET, "/users/me", token);
+        assertEquals(HttpStatus.OK, me.getStatusCode());
+        assertEquals(email, me.getBody().get("email"));
 
-        // After logout the same token is refused
+        // After logout the same token is refused everywhere, although its signature is still valid
         assertEquals(HttpStatus.NO_CONTENT, callWithToken(HttpMethod.POST, "/auth/logout", token).getStatusCode());
         ResponseEntity<Map> afterLogout = callWithToken(HttpMethod.GET, "/auth/validate", token);
         assertEquals(HttpStatus.UNAUTHORIZED, afterLogout.getStatusCode());
         assertEquals("Bearer", afterLogout.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE));
+        assertEquals(HttpStatus.UNAUTHORIZED, callWithToken(HttpMethod.GET, "/users/me", token).getStatusCode());
+
+        // Logging out again is not an error
+        assertEquals(HttpStatus.NO_CONTENT, callWithToken(HttpMethod.POST, "/auth/logout", token).getStatusCode());
+    }
+
+    @Test
+    void onlyAnAdmin_canGrantARole() {
+        // Arrange: a new user is a CUSTOMER
+        ResponseEntity<Map> signup = restTemplate.postForEntity("/auth/signup",
+                Map.of("name", "Integration Test", "email", email, "password", "correct horse battery"), Map.class);
+        String userId = (String) signup.getBody().get("id");
+        String customerToken = login();
+
+        // Act & Assert: a customer may not grant roles, not even to themselves
+        ResponseEntity<Map> asCustomer = callWithToken(HttpMethod.PUT, "/users/" + userId + "/roles/SELLER", customerToken);
+        assertEquals(HttpStatus.FORBIDDEN, asCustomer.getStatusCode());
+        assertEquals("FORBIDDEN", asCustomer.getBody().get("error"));
+
+        // Arrange: the first administrator is made directly in the database; roles are read at login, so log in again
+        jdbcTemplate.update("INSERT INTO user_role (user_id, role) SELECT id, 'ADMIN' FROM users WHERE email = ?", email);
+        String adminToken = login();
+
+        // Act & Assert: an admin can make a user a SELLER
+        ResponseEntity<Map> asAdmin = callWithToken(HttpMethod.PUT, "/users/" + userId + "/roles/SELLER", adminToken);
+        assertEquals(HttpStatus.OK, asAdmin.getStatusCode());
+        assertEquals(List.of("CUSTOMER", "SELLER", "ADMIN"), asAdmin.getBody().get("roles"));
+    }
+
+    private String login() {
+        ResponseEntity<Map> login = restTemplate.postForEntity("/auth/login",
+                Map.of("email", email, "password", "correct horse battery"), Map.class);
+        assertEquals(HttpStatus.OK, login.getStatusCode());
+        return (String) login.getBody().get("token");
     }
 
     @Test

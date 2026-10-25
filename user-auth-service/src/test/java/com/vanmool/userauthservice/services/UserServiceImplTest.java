@@ -1,13 +1,17 @@
 package com.vanmool.userauthservice.services;
 
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
 import com.vanmool.userauthservice.exceptions.InvalidTokenException;
+import com.vanmool.userauthservice.exceptions.UserNotFoundException;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.Token;
 import com.vanmool.userauthservice.models.User;
 import com.vanmool.userauthservice.repositories.TokenRepository;
 import com.vanmool.userauthservice.repositories.UserRepository;
+import com.vanmool.userauthservice.security.models.CustomUserDetails;
+import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -16,14 +20,17 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -35,20 +42,21 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-// Plain unit test: repositories and the password encoder are Mockito mocks (no database, no slow BCrypt). JwtService
-// is real, with a test key: signing and checking JWTs is part of the behaviour under test. The clock is fixed, so
-// token expiry can be checked to the exact second
+// Plain unit test: repositories, the password encoder and Spring Security's AuthenticationManager are Mockito mocks
+// (no database, no slow BCrypt). JwtService is real, with a test RSA key: signing and checking JWTs is part of the
+// behaviour under test. The clock is fixed, so token expiry can be checked to the exact second.
 @ExtendWith(MockitoExtension.class)
 class UserServiceImplTest {
     private static final Instant NOW = Instant.parse("2026-10-25T10:00:00Z");
     private static final Duration TOKEN_VALIDITY = Duration.ofHours(10);
+    private static final UUID ASHA_ID = UUID.fromString("5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10");
+    private static final UUID TOKEN_ID = UUID.fromString("0f6e2b8a-77d4-4e8a-b1f3-3c2d9a5e4b71");
 
     @Mock
     private UserRepository userRepository;
@@ -59,18 +67,19 @@ class UserServiceImplTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
-    private final JwtService jwtService = new JwtService(Jwts.SIG.HS256.key().build(), Clock.fixed(NOW, ZoneOffset.UTC));
+    @Mock
+    private AuthenticationManager authenticationManager;
 
+    private JwtService jwtService;
     private UserServiceImpl userService;
 
     @BeforeEach
-    void setUp() {
-        userService = new UserServiceImpl(userRepository, tokenRepository, passwordEncoder, jwtService,
-                Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY);
+    void setUp() throws Exception {
+        jwtService = new JwtService(new RSAKeyGenerator(2048).keyID("test-key").generate(), "http://localhost:8081",
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        userService = new UserServiceImpl(userRepository, tokenRepository, passwordEncoder, authenticationManager,
+                jwtService, Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY);
     }
-
-    private static final UUID ASHA_ID = UUID.fromString("5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10");
-    private static final UUID TOKEN_ID = UUID.fromString("0f6e2b8a-77d4-4e8a-b1f3-3c2d9a5e4b71");
 
     private static User asha() {
         User user = new User();
@@ -82,12 +91,18 @@ class UserServiceImplTest {
         return user;
     }
 
-    private static Token token(User user, Instant expiresAt, boolean revoked) {
+    private static Token token(User user, boolean revoked) {
         Token token = new Token();
         token.setUser(user);
-        token.setExpiresAt(expiresAt);
+        token.setExpiresAt(NOW.plus(TOKEN_VALIDITY));
         token.setRevoked(revoked);
         return token;
+    }
+
+    // What the AuthenticationManager returns after checking the password: the user as Spring Security sees it
+    private static Authentication authenticated(User user) {
+        CustomUserDetails details = new CustomUserDetails(user);
+        return UsernamePasswordAuthenticationToken.authenticated(details, null, details.getAuthorities());
     }
 
     // save() gives the token its generated id, as Hibernate does on insert
@@ -99,8 +114,8 @@ class UserServiceImplTest {
         });
     }
 
-    private String jwtFor(User user, UUID tokenId) {
-        return jwtService.issue(user, tokenId, NOW, NOW.plus(TOKEN_VALIDITY));
+    private String jwtFor(UUID tokenId) {
+        return jwtService.issue(ASHA_ID, "asha@example.com", Set.of(Role.CUSTOMER), tokenId, NOW, NOW.plus(TOKEN_VALIDITY));
     }
 
     @Nested
@@ -159,11 +174,11 @@ class UserServiceImplTest {
         void correctPassword_returnsASignedJwtWhoseIdIsTheSavedTokenRow() {
             // Arrange
             User asha = asha();
-            when(userRepository.findByEmail("asha@example.com")).thenReturn(Optional.of(asha));
-            when(passwordEncoder.matches("correct horse battery", "$2a$12$ashasHash")).thenReturn(true);
+            when(authenticationManager.authenticate(any())).thenReturn(authenticated(asha));
+            when(userRepository.getReferenceById(ASHA_ID)).thenReturn(asha);
             saveAssignsTokenIds();
 
-            // Act: the email is matched in any letter case, like at signup
+            // Act
             IssuedToken issued = userService.login(" ASHA@example.com", "correct horse battery");
 
             // Assert
@@ -173,6 +188,7 @@ class UserServiceImplTest {
             assertAll(
                     () -> assertEquals(saved.getValue().getId().toString(), claims.getId()),
                     () -> assertEquals(ASHA_ID.toString(), claims.getSubject()),
+                    () -> assertEquals(List.of("CUSTOMER"), claims.get("roles")),
                     () -> assertSame(asha, saved.getValue().getUser()),
                     () -> assertEquals(NOW.plus(TOKEN_VALIDITY), saved.getValue().getExpiresAt()),
                     () -> assertEquals(NOW.plus(TOKEN_VALIDITY), issued.expiresAt()),
@@ -181,10 +197,27 @@ class UserServiceImplTest {
         }
 
         @Test
+        void passesTheNormalizedEmailAndThePasswordToSpringSecurity() {
+            // Arrange
+            when(authenticationManager.authenticate(any())).thenReturn(authenticated(asha()));
+            when(userRepository.getReferenceById(ASHA_ID)).thenReturn(asha());
+            saveAssignsTokenIds();
+
+            // Act
+            userService.login(" ASHA@example.com ", "correct horse battery");
+
+            // Assert
+            verify(authenticationManager).authenticate(argThat(authentication ->
+                    authentication.getName().equals("asha@example.com")
+                            && authentication.getCredentials().equals("correct horse battery")
+                            && !authentication.isAuthenticated()));
+        }
+
+        @Test
         void twoLogins_getDifferentTokens() {
             // Arrange
-            when(userRepository.findByEmail("asha@example.com")).thenReturn(Optional.of(asha()));
-            when(passwordEncoder.matches("correct horse battery", "$2a$12$ashasHash")).thenReturn(true);
+            when(authenticationManager.authenticate(any())).thenReturn(authenticated(asha()));
+            when(userRepository.getReferenceById(ASHA_ID)).thenReturn(asha());
             saveAssignsTokenIds();
 
             // Act
@@ -196,25 +229,13 @@ class UserServiceImplTest {
         }
 
         @Test
-        void wrongPassword_throwsInvalidCredentialsAndIssuesNoToken() {
-            // Arrange
-            when(userRepository.findByEmail("asha@example.com")).thenReturn(Optional.of(asha()));
-            when(passwordEncoder.matches("wrong password", "$2a$12$ashasHash")).thenReturn(false);
+        void rejectedBySpringSecurity_throwsInvalidCredentialsAndIssuesNoToken() {
+            // Arrange: wrong password and unknown email both arrive as BadCredentialsException
+            when(authenticationManager.authenticate(any())).thenThrow(new BadCredentialsException("Bad credentials"));
 
             // Act & Assert
             assertThrows(InvalidCredentialsException.class, () -> userService.login("asha@example.com", "wrong password"));
-            verify(tokenRepository, never()).save(any());
-        }
-
-        @Test
-        void unknownEmail_throwsTheSameExceptionAfterTheSameBcryptWork() {
-            // Arrange
-            when(userRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
-
-            // Act & Assert: a BCrypt comparison still runs, so this case is not faster than a wrong password
-            assertThrows(InvalidCredentialsException.class, () -> userService.login("nobody@example.com", "any password"));
-            verify(passwordEncoder).matches(eq("any password"), anyString());
-            verify(tokenRepository, never()).save(any());
+            verifyNoInteractions(tokenRepository);
         }
     }
 
@@ -223,11 +244,11 @@ class UserServiceImplTest {
         @Test
         void validJwt_revokesItsTokenRow() {
             // Arrange
-            Token active = token(asha(), NOW.plus(TOKEN_VALIDITY), false);
+            Token active = token(asha(), false);
             when(tokenRepository.findById(TOKEN_ID)).thenReturn(Optional.of(active));
 
             // Act
-            userService.logout(jwtFor(asha(), TOKEN_ID));
+            userService.logout(jwtFor(TOKEN_ID));
 
             // Assert
             assertTrue(active.isRevoked());
@@ -250,19 +271,19 @@ class UserServiceImplTest {
         void validJwtWithAnActiveTokenRow_returnsItsUser() {
             // Arrange
             User asha = asha();
-            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.of(token(asha, NOW.plus(TOKEN_VALIDITY), false)));
+            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.of(token(asha, false)));
 
             // Act & Assert
-            assertSame(asha, userService.validateToken(jwtFor(asha, TOKEN_ID)));
+            assertSame(asha, userService.validateToken(jwtFor(TOKEN_ID)));
         }
 
         @Test
         void tokenEndedByLogout_isRejectedAlthoughItsSignatureIsStillGood() {
             // Arrange
-            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.of(token(asha(), NOW.plus(TOKEN_VALIDITY), true)));
+            when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.of(token(asha(), true)));
 
             // Act & Assert
-            assertThrows(InvalidTokenException.class, () -> userService.validateToken(jwtFor(asha(), TOKEN_ID)));
+            assertThrows(InvalidTokenException.class, () -> userService.validateToken(jwtFor(TOKEN_ID)));
         }
 
         @Test
@@ -271,13 +292,14 @@ class UserServiceImplTest {
             when(tokenRepository.findWithUserById(TOKEN_ID)).thenReturn(Optional.empty());
 
             // Act & Assert
-            assertThrows(InvalidTokenException.class, () -> userService.validateToken(jwtFor(asha(), TOKEN_ID)));
+            assertThrows(InvalidTokenException.class, () -> userService.validateToken(jwtFor(TOKEN_ID)));
         }
 
         @Test
         void expiredJwt_isRejectedWithoutTouchingTheDatabase() {
             // Arrange
-            String expired = jwtService.issue(asha(), TOKEN_ID, NOW.minus(TOKEN_VALIDITY), NOW.minusSeconds(1));
+            String expired = jwtService.issue(ASHA_ID, "asha@example.com", Set.of(Role.CUSTOMER), TOKEN_ID,
+                    NOW.minus(TOKEN_VALIDITY), NOW.minusSeconds(1));
 
             // Act & Assert
             assertThrows(InvalidTokenException.class, () -> userService.validateToken(expired));
@@ -289,6 +311,64 @@ class UserServiceImplTest {
             // Act & Assert
             assertThrows(InvalidTokenException.class, () -> userService.validateToken("made-up"));
             verifyNoInteractions(tokenRepository);
+        }
+    }
+
+    @Nested
+    class GetUserAndGrantRole {
+        @Test
+        void getUser_returnsTheUserWithTheirRoles() {
+            // Arrange
+            User asha = asha();
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.of(asha));
+
+            // Act & Assert
+            assertSame(asha, userService.getUser(ASHA_ID));
+        }
+
+        @Test
+        void getUser_unknownId_throwsUserNotFound() {
+            // Arrange
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThrows(UserNotFoundException.class, () -> userService.getUser(ASHA_ID));
+        }
+
+        @Test
+        void grantRole_addsTheRoleAndKeepsTheOthers() {
+            // Arrange
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.of(asha()));
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            // Act
+            User result = userService.grantRole(ASHA_ID, Role.SELLER);
+
+            // Assert
+            assertEquals(Set.of(Role.CUSTOMER, Role.SELLER), result.getRoles());
+        }
+
+        @Test
+        void grantRole_thatTheUserAlreadyHas_changesNothing() {
+            // Arrange
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.of(asha()));
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            // Act: PUT is idempotent, so repeating the request is safe
+            User result = userService.grantRole(ASHA_ID, Role.CUSTOMER);
+
+            // Assert
+            assertEquals(Set.of(Role.CUSTOMER), result.getRoles());
+        }
+
+        @Test
+        void grantRole_unknownUser_throwsAndSavesNothing() {
+            // Arrange
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThrows(UserNotFoundException.class, () -> userService.grantRole(ASHA_ID, Role.SELLER));
+            verify(userRepository, never()).save(any());
         }
     }
 }

@@ -9,6 +9,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -18,6 +20,11 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     // Products are soft deleted, so reads skip rows whose deleted flag is set
     @EntityGraph(attributePaths = "category")
     Optional<Product> findByIdAndDeletedFalse(UUID id);
+
+    boolean existsByIdAndDeletedFalse(UUID id);
+
+    // The products of a stock reservation: only their names and prices are used, so the category is not fetched
+    List<Product> findAllByIdInAndDeletedFalse(Collection<UUID> ids);
 
     // The catalog query behind GET /products. Every filter is optional: a null parameter switches its condition off.
     // textPattern and originPattern are LIKE patterns ("%word%") built by the service, with "!" escaping a literal

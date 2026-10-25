@@ -26,6 +26,21 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.NOT_FOUND, "PRODUCT_NOT_FOUND", e.getMessage(), request);
     }
 
+    @ExceptionHandler(InsufficientStockException.class)
+    public ResponseEntity<ErrorDto> handleInsufficientStock(InsufficientStockException e, HttpServletRequest request) {
+        return buildError(HttpStatus.CONFLICT, "INSUFFICIENT_STOCK", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(ReservationConflictException.class)
+    public ResponseEntity<ErrorDto> handleReservationConflict(ReservationConflictException e, HttpServletRequest request) {
+        return buildError(HttpStatus.CONFLICT, "RESERVATION_CONFLICT", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(InvalidRequestException.class)
+    public ResponseEntity<ErrorDto> handleInvalidRequest(InvalidRequestException e, HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", e.getMessage(), request);
+    }
+
     @ExceptionHandler({JsonPatchException.class, JsonProcessingException.class})
     public ResponseEntity<ErrorDto> handleInvalidPatch(HttpServletRequest request) {
         return buildError(HttpStatus.BAD_REQUEST, "INVALID_PATCH", "Patch could not be applied to the product", request);

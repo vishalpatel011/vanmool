@@ -3,6 +3,7 @@ package com.vanmool.productservice.controllers;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
@@ -216,7 +217,7 @@ class ProductControllerWebMvcTest {
         @Test
         void returnsTheWholeProduct() throws Exception {
             // Arrange
-            when(productService.getProductById(PRODUCT_ID)).thenReturn(bambooBasket());
+            when(productService.getProductById(PRODUCT_ID)).thenReturn(ProductResponseDto.from(bambooBasket()));
 
             // Act & Assert: STRICT means no field may be missing or extra
             mockMvc.perform(get("/products/{id}", PRODUCT_ID))

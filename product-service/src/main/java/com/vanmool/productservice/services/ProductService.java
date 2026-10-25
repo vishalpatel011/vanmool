@@ -1,6 +1,7 @@
 package com.vanmool.productservice.services;
 
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Product;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -13,7 +14,7 @@ import org.springframework.data.domain.Pageable;
 import java.util.UUID;
 
 public interface ProductService {
-    Product getProductById(UUID id) throws ProductNotFoundException;
+    ProductResponseDto getProductById(UUID id) throws ProductNotFoundException;
     Page<Product> searchProducts(ProductSearchCriteria criteria, Pageable pageable);
     Product createProduct(ProductRequestDto productRequestDto);
     Product replaceProduct(UUID id, ProductRequestDto productRequestDto) throws ProductNotFoundException;

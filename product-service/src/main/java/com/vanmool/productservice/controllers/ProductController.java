@@ -48,8 +48,8 @@ public class ProductController {
 
     @GetMapping("/products/{id}")
     public ProductResponseDto getProductById(@PathVariable("id") UUID id) throws ProductNotFoundException {
-        Product product = productService.getProductById(id);
-        return ProductResponseDto.from(product);
+        // Already a DTO: the service caches this response in Redis
+        return productService.getProductById(id);
     }
 
     @PostMapping("/products")

@@ -28,9 +28,8 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -66,45 +65,16 @@ class ProductControllerTest {
     }
 
     @Test
-    void getProductById_mapsEveryFieldOfTheProductToTheResponse() throws ProductNotFoundException {
-        // Arrange
-        Product basket = product("Handcrafted Bamboo Basket", "Traditional Crafts");
-        basket.setId(PRODUCT_ID);
-        basket.setDescription("Woven by hand from local bamboo in Dangs, Gujarat");
-        basket.setImageUrl("https://example.com/images/bamboo-basket.jpg");
-        basket.setPrice(new BigDecimal("499.99"));
-        basket.setOriginRegion("Dangs, Gujarat");
-        basket.setMaterials("Bamboo");
-        basket.setStory("Woven by artisans in the Dangs forests");
+    void getProductById_returnsTheServiceResponseAsItIs() throws ProductNotFoundException {
+        // Arrange: the service already returns the DTO (it is what the product cache holds)
+        ProductResponseDto basket = ProductResponseDto.from(product("Handcrafted Bamboo Basket", "Traditional Crafts"));
         when(productService.getProductById(PRODUCT_ID)).thenReturn(basket);
 
         // Act
         ProductResponseDto response = productController.getProductById(PRODUCT_ID);
 
         // Assert
-        assertAll(
-                () -> assertEquals(PRODUCT_ID, response.getId()),
-                () -> assertEquals("Handcrafted Bamboo Basket", response.getName()),
-                () -> assertEquals("Woven by hand from local bamboo in Dangs, Gujarat", response.getDescription()),
-                () -> assertEquals("https://example.com/images/bamboo-basket.jpg", response.getImageUrl()),
-                () -> assertEquals(new BigDecimal("499.99"), response.getPrice()),
-                () -> assertEquals("Traditional Crafts", response.getCategory()),
-                () -> assertEquals("Dangs, Gujarat", response.getOriginRegion()),
-                () -> assertEquals("Bamboo", response.getMaterials()),
-                () -> assertEquals("Woven by artisans in the Dangs forests", response.getStory())
-        );
-    }
-
-    @Test
-    void getProductById_whenProductHasNoCategory_returnsNullCategory() throws ProductNotFoundException {
-        // Arrange
-        when(productService.getProductById(PRODUCT_ID)).thenReturn(product("Wooden Spinning Top", null));
-
-        // Act
-        ProductResponseDto response = productController.getProductById(PRODUCT_ID);
-
-        // Assert
-        assertNull(response.getCategory());
+        assertSame(basket, response);
     }
 
     @Test

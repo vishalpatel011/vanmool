@@ -1,0 +1,21 @@
+# Local infrastructure for development: docker compose up -d
+# MySQL runs outside Docker for now (see README); the services themselves join this file when they are containerized.
+services:
+  redis:
+    image: redis:7.4-alpine
+    # appendonly: every change is also written to a log on disk (flushed once a second), so carts, which live only
+    # in Redis, survive a restart of the container. The product cache would not need it: it is refilled from MySQL.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      # Reachable from this machine only, not from the network
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:

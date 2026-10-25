@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
@@ -110,16 +111,36 @@ class ProductDbServiceTest {
     }
 
     @Test
-    void getProductById_whenProductExists_returnsIt() throws ProductNotFoundException {
+    void getProductById_whenProductExists_returnsEveryFieldAsTheResponse() throws ProductNotFoundException {
         // Arrange
-        Product basket = bambooBasket();
-        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(basket));
+        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(bambooBasket()));
 
         // Act
-        Product result = productDbService.getProductById(PRODUCT_ID);
+        ProductResponseDto response = productDbService.getProductById(PRODUCT_ID);
 
         // Assert
-        assertSame(basket, result);
+        assertAll(
+                () -> assertEquals(PRODUCT_ID, response.getId()),
+                () -> assertEquals("Handcrafted Bamboo Basket", response.getName()),
+                () -> assertEquals("Woven by hand from local bamboo in Dangs, Gujarat", response.getDescription()),
+                () -> assertEquals("https://example.com/images/bamboo-basket.jpg", response.getImageUrl()),
+                () -> assertEquals(new BigDecimal("499.99"), response.getPrice()),
+                () -> assertEquals("Traditional Crafts", response.getCategory()),
+                () -> assertEquals("Dangs, Gujarat", response.getOriginRegion()),
+                () -> assertEquals("Bamboo", response.getMaterials()),
+                () -> assertEquals("Woven by artisans in the Dangs forests", response.getStory())
+        );
+    }
+
+    @Test
+    void getProductById_whenProductHasNoCategory_returnsNullCategory() throws ProductNotFoundException {
+        // Arrange
+        Product top = bambooBasket();
+        top.setCategory(null);
+        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(top));
+
+        // Act & Assert
+        assertNull(productDbService.getProductById(PRODUCT_ID).getCategory());
     }
 
     @Test

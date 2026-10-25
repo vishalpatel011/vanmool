@@ -86,11 +86,13 @@ Target architecture (services are added one at a time; the table below shows wha
 | Spring Security, BCrypt | Password hashing, authentication and authorization | In use |
 | JWT (JJWT, RS256) | Signed login tokens | In use |
 | Spring Authorization Server | OAuth2 / OpenID Connect authorization code flow with PKCE | In use |
-| Redis | Product cache and cart storage | Planned |
+| Redis 7 (Spring Data Redis, Lettuce) | Product cache | In use |
+| Redis | Cart storage | Planned |
 | Apache Kafka | Domain events between services | Planned |
 | Spring Cloud Gateway, Eureka, RestTemplate | Routing, service discovery and calls between services | Planned |
 | Razorpay, Stripe | Payments | Planned |
-| Docker | Containers and local infrastructure | Planned |
+| Docker Compose | Local infrastructure (Redis) | In use |
+| Docker | Containers for the services | Planned |
 | AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
 
 ## Repository structure
@@ -101,11 +103,13 @@ vanmool/
 ├── mvnw, mvnw.cmd       Maven wrapper
 ├── .mvn/
 ├── .env.example         environment variables the services read
+├── docker-compose.yml   local infrastructure: Redis
 ├── user-auth-service/   accounts, login and tokens (same layout as product-service)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
         ├── main/java/com/vanmool/productservice/
+        │   ├── configs/        Spring configuration (the Redis product cache)
         │   ├── controllers/    REST endpoints
         │   ├── services/       business logic (ProductService and its database implementation, CategoryService)
         │   ├── repositories/   Spring Data JPA repositories
@@ -127,6 +131,7 @@ Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xm
 
 - JDK 17 or newer
 - MySQL 8
+- Docker, for Redis (`docker compose`)
 - Maven is not required; the repository includes the Maven wrapper.
 
 ### 1. Create the database
@@ -149,7 +154,15 @@ The tables are created by Flyway, not by hand and not by Hibernate. On startup F
 
 A schema change is always a new script with the next version number, named `V<version>__<description>.sql` (for example `V1__create_category_and_product_tables.sql`). A script that has already been applied is never edited: Flyway stores a checksum of each script and refuses to start if an applied one changes.
 
-### 2. Set the environment variables
+### 2. Start Redis
+
+```
+docker compose up -d redis
+```
+
+This starts Redis 7 on `localhost:6379`, reachable from this machine only. Its data is kept in a Docker volume (`redis-data`) and written to disk once a second (append-only file), so it survives a restart of the container. `docker compose stop redis` stops it; `docker compose down -v` also deletes its data.
+
+### 3. Set the environment variables
 
 Each service reads its settings from the environment of its own process, so the same variable names are used by every service. `.env.example` lists them:
 
@@ -159,23 +172,26 @@ Each service reads its settings from the environment of its own process, so the 
 | `DB_USERNAME` | Database user | `ProductService_user` | `UserAuthService_user` |
 | `DB_PASSWORD` | Database password | empty | empty |
 | `SERVER_PORT` | HTTP port | `8080` | `8081` |
+| `REDIS_HOST`, `REDIS_PORT` | Redis server | `localhost`, `6379` | not used |
+| `REDIS_PASSWORD` | Redis password, if the server requires one | empty | not used |
+| `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used |
 
 - **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
 - **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
 
 Never commit real credentials. `.env` is git-ignored for this reason.
 
-### 3. Build and test
+### 4. Build and test
 
 ```
 ./mvnw test            # unit tests only: fast, no database needed
-./mvnw verify          # unit tests, then integration tests against MySQL (Git Bash, macOS, Linux)
+./mvnw verify          # unit tests, then integration tests against MySQL and Redis (Git Bash, macOS, Linux)
 .\mvnw.cmd verify      # the same from Windows PowerShell or cmd
 ```
 
 To build a single service: `./mvnw -pl product-service verify` or `./mvnw -pl user-auth-service verify`.
 
-### 4. Run
+### 5. Run
 
 - **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication` or `UserAuthServiceApplication`.
 - **Command line:** `./mvnw -pl product-service spring-boot:run` or `./mvnw -pl user-auth-service spring-boot:run`
@@ -287,6 +303,22 @@ Every error, including the ones Spring itself raises (unknown path, wrong method
 | `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, ... | 404, 405, 415, ... | Errors raised by Spring before a controller runs; the code is the HTTP status name |
 | `INTERNAL_ERROR` | 500 | An unexpected server error. The details are logged on the server, never sent to the client |
 
+### Product cache (Redis)
+
+`GET /products/{id}` is served from Redis when it can be. The first request for a product reads MySQL and stores the response under the key `product:{id}`, as the same JSON the API returns; later requests for that product read only Redis.
+
+- **Changes remove the entry.** `PUT`, `PATCH` and `DELETE` remove the product's key once their database transaction has committed. A change that fails or is rolled back leaves the entry as it was, because MySQL still holds the old product.
+- **Entries expire after 10 minutes** (`PRODUCT_CACHE_TTL`). This bounds how long a change made outside the API, for example directly in MySQL, can stay invisible.
+- **"Not found" is not cached**, so a product is never hidden by an earlier miss.
+- **Redis is optional at run time.** If Redis is down, the failed cache call is logged as a warning and the request is answered from MySQL. While the connection is down, commands are rejected at once instead of waiting for a timeout, so requests are not slowed down; the cache is used again as soon as the connection is back. An entry that could not be removed during an outage can be stale for at most the 10 minutes above.
+- **Only single products are cached.** Catalog pages (`GET /products`) always come from MySQL: they have too many combinations of filters, and every product change would have to remove all of them.
+
+```
+docker compose exec redis redis-cli --scan --pattern 'product:*'
+docker compose exec redis redis-cli GET product:150dac81-6130-4903-9385-9b682db879b3
+docker compose exec redis redis-cli TTL product:150dac81-6130-4903-9385-9b682db879b3
+```
+
 ## User Auth Service API
 
 The user-auth service (port 8081) owns user accounts. It never stores or returns a password: only a BCrypt hash is kept.
@@ -368,7 +400,7 @@ Tests follow the testing pyramid: many fast unit tests, a few slower integration
 |---|---|---|---|---|
 | Unit tests | `*Test` | `./mvnw test` (Maven Surefire) | Only the JVM | Services and controllers as plain Java classes, with their dependencies replaced by Mockito mocks |
 | Web layer tests | `*WebMvcTest` | `./mvnw test` (Maven Surefire) | Only the JVM | Real HTTP requests through Spring MVC with MockMvc (`@WebMvcTest`): routing, JSON in and out, validation, status codes, headers and the error format, with the service replaced by a mock (`@MockitoBean`) |
-| Integration tests | `*IT` | `./mvnw verify` (Maven Failsafe) | A running MySQL (`DB_URL`) | The whole application starting against the database: Flyway's migrations apply and Hibernate accepts the schema |
+| Integration tests | `*IT` | `./mvnw verify` (Maven Failsafe) | A running MySQL (`DB_URL`) and Redis | The whole application against the real database and Redis: Flyway's migrations apply, Hibernate accepts the schema, queries and the product cache behave as expected |
 
 Unit tests use JUnit 5 and Mockito, follow Arrange-Act-Assert, and sit in packages that mirror the main code (`services/ProductDbServiceTest` tests `services/ProductDbService`). They cover the happy path, edge cases and failure cases of each business rule: a `PUT` never creates a product, a `PATCH` cannot change the id and must still pass validation, a delete only sets the `deleted` flag, and finding or creating a category recovers when two requests create the same new name at once.
 
@@ -392,7 +424,8 @@ Web layer tests check the JSON field by field with `jsonPath`, or against the wh
 - [x] MockMvc web layer tests with JSON assertions
 - [x] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2 / OpenID Connect
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
-- [ ] Redis: product caching and cart storage
+- [x] Redis: product cache
+- [ ] Redis: cart storage
 - [x] Product search, pagination, sorting and filtering
 - [ ] Kafka domain events
 - [ ] Payment Service: Razorpay and Stripe, webhooks, reconciliation

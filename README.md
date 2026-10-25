@@ -259,9 +259,12 @@ Tests follow the testing pyramid: many fast unit tests, a few slower integration
 | Kind | Naming | Runs in | Needs | What it covers |
 |---|---|---|---|---|
 | Unit tests | `*Test` | `./mvnw test` (Maven Surefire) | Only the JVM | Services and controllers as plain Java classes, with their dependencies replaced by Mockito mocks |
+| Web layer tests | `*WebMvcTest` | `./mvnw test` (Maven Surefire) | Only the JVM | Real HTTP requests through Spring MVC with MockMvc (`@WebMvcTest`): routing, JSON in and out, validation, status codes, headers and the error format, with the service replaced by a mock (`@MockitoBean`) |
 | Integration tests | `*IT` | `./mvnw verify` (Maven Failsafe) | A running MySQL (`DB_URL`) | The whole application starting against the database: Flyway's migrations apply and Hibernate accepts the schema |
 
 Unit tests use JUnit 5 and Mockito, follow Arrange-Act-Assert, and sit in packages that mirror the main code (`services/ProductDbServiceTest` tests `services/ProductDbService`). They cover the happy path, edge cases and failure cases of each business rule: a `PUT` never creates a product, a `PATCH` cannot change the id and must still pass validation, a delete only sets the `deleted` flag, and finding or creating a category recovers when two requests create the same new name at once.
+
+Web layer tests check the JSON field by field with `jsonPath`, or against the whole expected body with `content().json(..., STRICT)`. The expected JSON is written out in the test rather than produced by the same serializer the application uses.
 
 `./mvnw test` also writes a JaCoCo code coverage report to `product-service/target/site/jacoco/index.html`. Lombok-generated getters and setters are left out of it (`product-service/lombok.config`).
 
@@ -278,7 +281,7 @@ Unit tests use JUnit 5 and Mockito, follow Arrange-Act-Assert, and sit in packag
 - [x] Derived query methods, JPQL queries and DTO projections
 - [x] Fetch types: LAZY associations, entity graphs instead of N+1 queries, transactional writes, open-in-view off
 - [x] Unit tests with JUnit 5 and Mockito, unit and integration tests run separately, JaCoCo coverage
-- [ ] MockMvc controller tests, JSON assertions
+- [x] MockMvc web layer tests with JSON assertions
 - [ ] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
 - [ ] Redis: product caching and cart storage

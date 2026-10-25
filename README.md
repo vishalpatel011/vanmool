@@ -264,7 +264,7 @@ The product service currently has one Spring Boot test that starts the full appl
 - [x] UUID identifiers; shared entity fields through a `@MappedSuperclass`
 - [x] Database migrations with Flyway
 - [x] Derived query methods, JPQL queries and DTO projections
-- [ ] Fetch types and query tuning
+- [x] Fetch types: LAZY associations, entity graphs instead of N+1 queries, transactional writes, open-in-view off
 - [ ] Unit tests, MockMvc controller tests, JSON assertions, test doubles
 - [ ] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS

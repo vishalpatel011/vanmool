@@ -16,5 +16,6 @@
         <module>product-service</module>
         <module>user-auth-service</module>
         <module>cart-service</module>
+        <module>order-service</module>
     </modules>
 </project>

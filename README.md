@@ -62,7 +62,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | `user-auth-service` | Signup, login, password hashing, JWT, roles | MySQL (`user_db`) | In progress |
 | `inventory-service` | Stock levels, reservation and release | MySQL | Inside `product-service` for now (own tables and endpoints) |
 | `cart-service` | Shopping carts of signed-in users, priced with current product prices | Redis | In progress |
-| `order-service` | Orders and the order lifecycle | MySQL | Planned |
+| `order-service` | Checkout from the cart, order history, the order lifecycle and cancellation | MySQL (`order_db`) | In progress |
 | `payment-service` | Payments, webhooks and reconciliation (Razorpay, Stripe) | MySQL | Planned |
 | `notification-service` | Order and payment notifications from Kafka events | | Planned |
 | `api-gateway` | Single entry point and request routing | | Planned |
@@ -107,6 +107,7 @@ vanmool/
 ├── docker-compose.yml   local infrastructure: Redis
 ├── user-auth-service/   accounts, login and tokens (same layout as product-service)
 ├── cart-service/       shopping carts in Redis (same layout; clients/ holds the call to product-service)
+├── order-service/      orders (same layout; clients/ holds the calls to cart-service and product-service)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
@@ -150,6 +151,10 @@ GRANT ALL PRIVILEGES ON product_db.* TO 'vanmool_user'@'localhost';
 CREATE DATABASE user_db;
 CREATE USER 'vanmool_auth_user'@'localhost' IDENTIFIED BY 'choose-another-password';
 GRANT ALL PRIVILEGES ON user_db.* TO 'vanmool_auth_user'@'localhost';
+
+CREATE DATABASE order_db;
+CREATE USER 'vanmool_order_user'@'localhost' IDENTIFIED BY 'choose-a-third-password';
+GRANT ALL PRIVILEGES ON order_db.* TO 'vanmool_order_user'@'localhost';
 ```
 
 The tables are created by Flyway, not by hand and not by Hibernate. On startup Flyway applies every script in the service's `src/main/resources/db/migration` that the database has not seen yet, and records it in the `flyway_schema_history` table. Hibernate then only checks that the tables match the entities (`spring.jpa.hibernate.ddl-auto=validate`) and stops the application if they do not.
@@ -168,21 +173,22 @@ This starts Redis 7 on `localhost:6379`, reachable from this machine only. Its d
 
 Each service reads its settings from the environment of its own process, so the same variable names are used by every service. `.env.example` lists them:
 
-| Variable | Description | product-service default | user-auth-service default | cart-service default |
-|---|---|---|---|---|
-| `DB_URL` | JDBC URL of the service's database | `jdbc:mysql://localhost:3306/product_db` | `jdbc:mysql://localhost:3306/user_db` | not used |
-| `DB_USERNAME` | Database user | `ProductService_user` | `UserAuthService_user` | not used |
-| `DB_PASSWORD` | Database password | empty | empty | not used |
-| `SERVER_PORT` | HTTP port | `8080` | `8081` | `8082` |
-| `REDIS_HOST`, `REDIS_PORT` | Redis server | `localhost`, `6379` | not used | `localhost`, `6379` |
-| `REDIS_PASSWORD` | Redis password, if the server requires one | empty | not used | empty |
-| `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used | not used |
-| `AUTH_ISSUER` | Issuer of the tokens: user-auth-service's public URL | not used | `http://localhost:8081` | `http://localhost:8081` |
-| `AUTH_JWKS_URI` | Where user-auth-service publishes its public keys | not used | not used | `http://localhost:8081/oauth2/jwks` |
-| `PRODUCT_SERVICE_URL` | Base URL of product-service | not used | not used | `http://localhost:8080` |
-| `CART_TTL` | A cart untouched for this long is deleted (ISO-8601 duration) | not used | not used | `P30D` (30 days) |
+| Variable | Description | product-service default | user-auth-service default | cart-service default | order-service default |
+|---|---|---|---|---|---|
+| `DB_URL` | JDBC URL of the service's database | `jdbc:mysql://localhost:3306/product_db` | `jdbc:mysql://localhost:3306/user_db` | not used | `jdbc:mysql://localhost:3306/order_db` |
+| `DB_USERNAME` | Database user | `ProductService_user` | `UserAuthService_user` | not used | `OrderService_user` |
+| `DB_PASSWORD` | Database password | empty | empty | not used | empty |
+| `SERVER_PORT` | HTTP port | `8080` | `8081` | `8082` | `8083` |
+| `REDIS_HOST`, `REDIS_PORT` | Redis server | `localhost`, `6379` | not used | `localhost`, `6379` | not used |
+| `REDIS_PASSWORD` | Redis password, if the server requires one | empty | not used | empty | not used |
+| `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used | not used | not used |
+| `AUTH_ISSUER` | Issuer of the tokens: user-auth-service's public URL | not used | `http://localhost:8081` | `http://localhost:8081` | `http://localhost:8081` |
+| `AUTH_JWKS_URI` | Where user-auth-service publishes its public keys | not used | not used | `http://localhost:8081/oauth2/jwks` | `http://localhost:8081/oauth2/jwks` |
+| `PRODUCT_SERVICE_URL` | Base URL of product-service | not used | not used | `http://localhost:8080` | `http://localhost:8080` |
+| `CART_TTL` | A cart untouched for this long is deleted (ISO-8601 duration) | not used | not used | `P30D` (30 days) | not used |
+| `CART_SERVICE_URL` | Base URL of cart-service | not used | not used | not used | `http://localhost:8082` |
 
-- **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`, `CartServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
+- **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
 - **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
 
 Never commit real credentials. `.env` is git-ignored for this reason.
@@ -195,14 +201,14 @@ Never commit real credentials. `.env` is git-ignored for this reason.
 .\mvnw.cmd verify      # the same from Windows PowerShell or cmd
 ```
 
-To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user-auth-service verify` or `./mvnw -pl cart-service verify`.
+To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user-auth-service verify`, `./mvnw -pl cart-service verify` or `./mvnw -pl order-service verify`.
 
 ### 5. Run
 
-- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication` or `CartServiceApplication`.
-- **Command line:** `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`)
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication` or `OrderServiceApplication`.
+- **Command line:** `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`)
 
-The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081` and the cart service on `http://localhost:8082`, so all of them can run at once. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082` and the order service on `http://localhost:8083`, so all of them can run at once. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
 
 ## Product Service API
 
@@ -427,6 +433,7 @@ The cart service (port 8082) keeps the shopping cart of each signed-in user in R
 | Method | Path | Success | Errors |
 |---|---|---|---|
 | GET | `/cart` | 200, the cart with current prices | 401, 503 |
+| GET | `/cart/items` | 200, only the product ids and quantities, read from Redis alone (used at checkout) | 401, 503 |
 | POST | `/cart/items` | 200, the updated cart: the quantity is added to what is there | 400, 401, 404 unknown product, 409 limit reached, 503 |
 | PUT | `/cart/items/{productId}` | 200, the updated cart: the quantity is set, and the product added if missing | 400, 401, 404 unknown product, 409 limit reached, 503 |
 | DELETE | `/cart/items/{productId}` | 204, the product is no longer in the cart (also if it never was) | 400 invalid id, 401, 503 |
@@ -457,10 +464,11 @@ The cart as `GET /cart` and the changes return it:
 How it works:
 
 - **Storage.** A cart is one Redis hash, `cart:{userId}`, mapping each product id to its quantity. Adding uses `HINCRBY`, which is atomic, so two quick clicks on "add" both count. A cart that nobody changes for 30 days (`CART_TTL`) expires; every change starts the 30 days again. Redis writes its data to disk (see Start Redis), so carts survive a restart.
-- **Prices are never stored in the cart.** Each read asks the product service for the current name and price of every product (`GET /products/{id}`, which the product service answers from its own Redis cache). A price change shows up in the cart at once. The order service will price an order again itself when it is placed.
+- **Prices are never stored in the cart.** Each read asks the product service for the current name and price of every product (`GET /products/{id}`, which the product service answers from its own Redis cache). A price change shows up in the cart at once. The order service does not use the cart's prices: it takes the prices from the stock reservation when the order is placed.
 - **Products removed from the catalog** stay in the cart with `"available": false` and no price, and are left out of the totals, so the customer sees what happened. Adding an unknown product is refused with 404.
 - **When the product service is down or slow** (more than 1 s to connect or 2 s to answer), reading or changing the cart answers 503 `PRODUCT_SERVICE_UNAVAILABLE` instead of a cart without prices. Removing products and emptying the cart need only Redis, so they keep working.
 - **When Redis is down**, every request answers 503 `CART_UNAVAILABLE` at once.
+- **Checkout reads `GET /cart/items`**, which needs only Redis: the order service takes its prices from the stock reservation, so pricing the cart for it would only add one product-service call per line.
 - **Tokens are checked here, without calling the user-auth service:** the signature against the user-auth service's public keys (`/oauth2/jwks`, fetched on first use and cached), the issuer and the expiry. A forged, altered, expired or unsigned token gets 401 `INVALID_TOKEN`. The limit of checking locally: a token that was logged out keeps working in the cart service until it expires.
 
 Errors use the same format as the other services. Codes: `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `FORBIDDEN` (403, a token that does not belong to a user), `PRODUCT_NOT_FOUND` (404), `CART_LIMIT_EXCEEDED` (409), `PRODUCT_SERVICE_UNAVAILABLE` and `CART_UNAVAILABLE` (503), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
@@ -470,6 +478,70 @@ docker compose exec redis redis-cli --scan --pattern 'cart:*'
 docker compose exec redis redis-cli HGETALL cart:<user id>
 docker compose exec redis redis-cli TTL cart:<user id>
 ```
+
+## Order Service API
+
+The order service (port 8083) turns the signed-in customer's cart into an order. Every request needs a token from the user-auth service; the customer is always the token's user, and another customer's order answers 404, as if it did not exist.
+
+| Method | Path | Success | Errors |
+|---|---|---|---|
+| POST | `/orders` | 201, the order, with `Location: /orders/{id}` | 400, 401, 409 cart empty, not enough stock or product no longer sold, 503 |
+| GET | `/orders?page=0&size=10` | 200, a page of the customer's orders, newest first (at most 50 per page) | 401 |
+| GET | `/orders/{id}` | 200, the order | 400 invalid id, 401, 404 |
+| POST | `/orders/{id}/cancel` | 200, the order, now `CANCELLED` | 400, 401, 404, 409 the order can no longer be cancelled |
+
+`POST /orders` takes only where to send the order; the products come from the cart and the prices from the product service, never from the client:
+
+```json
+{
+  "shippingAddress": {
+    "name": "Asha Gamit",
+    "phone": "9876543210",
+    "line1": "12 Station Road",
+    "line2": "Near the bus stand",
+    "city": "Ahwa",
+    "state": "Gujarat",
+    "pincode": "394710"
+  }
+}
+```
+
+`phone` is a 10-digit mobile number, `pincode` a 6-digit PIN code; `line2` is optional. The answer:
+
+```json
+{
+  "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "status": "PENDING_PAYMENT",
+  "items": [
+    { "productId": "150dac81-6130-4903-9385-9b682db879b3", "name": "Handcrafted Bamboo Basket",
+      "unitPrice": 499.99, "quantity": 2, "lineTotal": 999.98 }
+  ],
+  "totalAmount": 999.98,
+  "shippingAddress": { "name": "Asha Gamit", "phone": "9876543210", "...": "..." },
+  "createdAt": "2026-10-25T15:20:41.123456Z"
+}
+```
+
+**Placing an order** involves three services, with no transaction across them. Each step is arranged so that a failure leaves nothing behind:
+
+1. The cart is read from the cart service, with the customer's own token. An empty cart is 409 `CART_EMPTY`.
+2. The stock is reserved in the product service under a new order id. It is all or nothing: if any product is short, nothing is reserved (409 `INSUFFICIENT_STOCK`); a product no longer sold is 409 `PRODUCT_UNAVAILABLE`. The reservation returns each product's current name and price, and the order is placed at exactly these prices. If the product service does not answer in time, the order id is released, in case the units were taken anyway.
+3. The order is saved in `order_db` as `PENDING_PAYMENT`. If that fails, the reservation is released again.
+4. The cart is emptied. If that fails, the order still stands.
+
+**Idempotency-Key.** A client can send `Idempotency-Key: <a unique string>` (letters, digits, `-` and `_`, up to 100), for example a UUID it creates once per checkout. Sending the same request again, after a timeout or a double click, returns the order already placed instead of placing a second one; a unique key in the database also covers two requests arriving at the same moment.
+
+**Order states:**
+
+```
+PENDING_PAYMENT --(payment)--> CONFIRMED --> SHIPPED --> DELIVERED
+       |
+       +--(cancel)--> CANCELLED
+```
+
+Payment is not connected yet, so orders stay `PENDING_PAYMENT` until they are cancelled; `CONFIRMED`, `SHIPPED` and `DELIVERED` arrive with the payment service and producer tools. Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win, and then the reserved units go back to the stock. Cancelling a cancelled order again is allowed and releases the units again (releasing is idempotent), which completes a cancel during which the product service was unreachable.
+
+Errors use the same format as the other services. Codes: `INVALID_TOKEN` (401), `FORBIDDEN` (403), `ORDER_NOT_FOUND` (404), `CART_EMPTY`, `INSUFFICIENT_STOCK`, `PRODUCT_UNAVAILABLE` and `INVALID_ORDER_STATE` (409), `CART_SERVICE_UNAVAILABLE` and `PRODUCT_SERVICE_UNAVAILABLE` (503), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
 
 ## Testing
 
@@ -511,7 +583,9 @@ In the cart service, the call to the product service is tested against `MockRest
 - [ ] Kafka domain events
 - [ ] Payment Service: Razorpay and Stripe, webhooks, reconciliation
 - [x] Cart service: carts in Redis, current prices from the product service, JWTs checked with the user-auth service's public keys
-- [ ] Inventory, Order and Notification services
+- [x] Order service: checkout from the cart with stock reservations, Idempotency-Key, order history, cancellation
+- [x] Stock and stock reservations (inside the product service)
+- [ ] Notification service
 - [ ] Spring Cloud: Eureka service discovery and API Gateway
 - [ ] Docker and Docker Compose
 

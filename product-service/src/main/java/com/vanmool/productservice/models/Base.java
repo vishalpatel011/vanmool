@@ -21,12 +21,14 @@ public class Base {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+    @Column(nullable = false)
     private String name;
     // Hibernate fills these in on insert and on every update
     @CreationTimestamp
-    @Column(updatable = false)
+    @Column(nullable = false, updatable = false)
     private Date createdAt;
     @UpdateTimestamp
+    @Column(nullable = false)
     private Date lastModified;
     private boolean deleted; //soft delete flag
 }

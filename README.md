@@ -76,6 +76,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | Spring Boot 3.5 (Web, Data JPA) | REST APIs and persistence | In use |
 | Hibernate / JPA | Object-relational mapping | In use |
 | MySQL 8 | Relational database | In use |
+| Flyway | Versioned database migrations | In use |
 | Bean Validation (Hibernate Validator) | Request validation | In use |
 | json-patch | JSON Patch support for `PATCH` requests | In use |
 | Lombok | Boilerplate reduction | In use |
@@ -106,6 +107,9 @@ vanmool/
         │   ├── models/         JPA entities
         │   ├── dtos/           request and response objects
         │   └── exceptions/     custom exceptions and the global exception handler
+        ├── main/resources/
+        │   ├── application.properties
+        │   └── db/migration/   Flyway migration scripts (V1__..., V2__...)
         └── test/
 ```
 
@@ -129,7 +133,9 @@ CREATE USER 'vanmool_user'@'localhost' IDENTIFIED BY 'choose-a-password';
 GRANT ALL PRIVILEGES ON product_db.* TO 'vanmool_user'@'localhost';
 ```
 
-Until database migrations are introduced, Hibernate creates and updates the tables on startup (`spring.jpa.hibernate.ddl-auto=update`).
+The tables are created by Flyway, not by hand and not by Hibernate. On startup Flyway applies every script in `product-service/src/main/resources/db/migration` that the database has not seen yet, and records it in the `flyway_schema_history` table. Hibernate then only checks that the tables match the entities (`spring.jpa.hibernate.ddl-auto=validate`) and stops the application if they do not.
+
+A schema change is always a new script with the next version number, named `V<version>__<description>.sql` (for example `V1__create_category_and_product_tables.sql`). A script that has already been applied is never edited: Flyway stores a checksum of each script and refuses to start if an applied one changes.
 
 ### 2. Set the environment variables
 
@@ -230,7 +236,7 @@ The product service currently has one Spring Boot test that starts the full appl
 - [x] Database settings read from environment variables
 - [x] Request validation with Bean Validation
 - [x] UUID identifiers; shared entity fields through a `@MappedSuperclass`
-- [ ] Database migrations
+- [x] Database migrations with Flyway
 - [ ] Fetch types, query methods and query tuning
 - [ ] Unit tests, MockMvc controller tests, JSON assertions, test doubles
 - [ ] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2

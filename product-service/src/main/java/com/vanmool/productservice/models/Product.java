@@ -17,7 +17,7 @@ public class Product extends Base{
     @ManyToOne
     private Category category;
     // Money is stored exactly: DECIMAL(10,2), never a floating-point type
-    @Column(precision = 10, scale = 2)
+    @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 }
 

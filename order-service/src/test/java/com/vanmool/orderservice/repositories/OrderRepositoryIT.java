@@ -2,6 +2,7 @@ package com.vanmool.orderservice.repositories;
 
 import com.vanmool.orderservice.models.Order;
 import com.vanmool.orderservice.models.OrderStatus;
+import com.vanmool.orderservice.models.OrderStatusChange;
 import com.vanmool.orderservice.models.ShippingAddress;
 import jakarta.persistence.EntityManager;
 import org.hibernate.Hibernate;
@@ -15,6 +16,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -33,6 +35,9 @@ class OrderRepositoryIT {
 
     @Autowired
     private OrderRepository orderRepository;
+
+    @Autowired
+    private OrderStatusChangeRepository statusChangeRepository;
 
     @Autowired
     private EntityManager entityManager;
@@ -163,5 +168,70 @@ class OrderRepositoryIT {
         Order found = orderRepository.findByIdAndUserId(order.getId(), userId).orElseThrow();
         assertEquals(OrderStatus.CANCELLED, found.getStatus());
         assertEquals(1L, found.getVersion());
+    }
+
+    @Test
+    void ship_movesOnlyAConfirmedOrder_andStoresHowItWasSent() {
+        // Arrange: one paid order, one still waiting for payment
+        Order paid = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        orderRepository.moveStatus(paid.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED);
+        Order unpaid = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+
+        // Act
+        int shipped = orderRepository.ship(paid.getId(), "India Post", "EE123456789IN");
+        int again = orderRepository.ship(paid.getId(), "Delhivery", "DL1");
+        int notPaid = orderRepository.ship(unpaid.getId(), "India Post", "EE1");
+        entityManager.clear();
+
+        // Assert: the second UPDATE found the order already SHIPPED and kept the first shipment
+        assertEquals(List.of(1, 0, 0), List.of(shipped, again, notPaid));
+        Order found = orderRepository.findWithItemsById(paid.getId()).orElseThrow();
+        assertEquals(OrderStatus.SHIPPED, found.getStatus());
+        assertEquals("India Post", found.getCarrier());
+        assertEquals("EE123456789IN", found.getTrackingNumber());
+        assertEquals(2L, found.getVersion());
+        assertTrue(Hibernate.isInitialized(found.getItems()));
+        assertEquals(OrderStatus.PENDING_PAYMENT, orderRepository.findWithItemsById(unpaid.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void ordersOfOneStatus_areFoundWithoutTheOthers() {
+        // Arrange
+        Order paid = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        orderRepository.moveStatus(paid.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED);
+        orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        entityManager.clear();
+
+        // Act: other tests' orders may be in the table too; only this test's user is looked at
+        List<UUID> confirmed = orderRepository.findByStatus(OrderStatus.CONFIRMED, PageRequest.of(0, 50, Sort.by("createdAt")))
+                .stream().filter(order -> order.getUserId().equals(userId)).map(Order::getId).toList();
+
+        // Assert
+        assertEquals(List.of(paid.getId()), confirmed);
+    }
+
+    @Test
+    void timeline_isReadOldestFirst_forOneOrder_andForAPageOfOrders() {
+        // Arrange: rows saved out of order, for two orders
+        Order first = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        Order second = orderRepository.saveAndFlush(newOrder(userId, null, 1));
+        Instant placed = Instant.parse("2026-10-26T10:00:00Z");
+        statusChangeRepository.save(OrderStatusChange.of(first.getId(), OrderStatus.SHIPPED, placed.plusSeconds(7200), "India Post"));
+        statusChangeRepository.save(OrderStatusChange.of(first.getId(), OrderStatus.PENDING_PAYMENT, placed, null));
+        statusChangeRepository.save(OrderStatusChange.of(first.getId(), OrderStatus.CONFIRMED, placed.plusSeconds(60), "Paid"));
+        statusChangeRepository.save(OrderStatusChange.of(second.getId(), OrderStatus.PENDING_PAYMENT, placed.plusSeconds(30), null));
+        flushAndClear();
+
+        // Act
+        List<OrderStatusChange> one = statusChangeRepository.findByOrderIdOrderByChangedAtAsc(first.getId());
+        List<OrderStatusChange> both = statusChangeRepository.findByOrderIdInOrderByChangedAtAsc(
+                List.of(first.getId(), second.getId()));
+
+        // Assert: DATETIME(6) keeps the times exactly
+        assertEquals(List.of(OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED, OrderStatus.SHIPPED),
+                one.stream().map(OrderStatusChange::getStatus).toList());
+        assertEquals(placed.plusSeconds(7200), one.get(2).getChangedAt());
+        assertEquals(4, both.size());
+        assertEquals(second.getId(), both.get(1).getOrderId());
     }
 }

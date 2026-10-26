@@ -30,6 +30,15 @@ public final class Events {
     public record OrderCancelled(UUID eventId, UUID orderId, String customerEmail, BigDecimal totalAmount, String reason) {
     }
 
+    // trackingNumber may be null: a local delivery without one
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OrderShipped(UUID eventId, UUID orderId, String customerEmail, String carrier, String trackingNumber) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OrderDelivered(UUID eventId, UUID orderId, String customerEmail) {
+    }
+
     // payment-events, from payment-service
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PaymentSucceeded(UUID eventId, Instant occurredAt, UUID paymentId, UUID orderId, String customerEmail,

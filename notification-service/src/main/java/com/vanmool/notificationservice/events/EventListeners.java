@@ -50,6 +50,20 @@ public class EventListeners {
                 }
                 notifier.sendOnce(cancelled.eventId(), emailComposer.orderCancellation(cancelled));
             }
+            case "OrderShipped" -> {
+                Events.OrderShipped shipped = read(event, Events.OrderShipped.class);
+                if (shipped.orderId() == null || shipped.carrier() == null) {
+                    throw new MalformedEventException("OrderShipped event without its order or carrier: " + event);
+                }
+                notifier.sendOnce(shipped.eventId(), emailComposer.orderShipped(shipped));
+            }
+            case "OrderDelivered" -> {
+                Events.OrderDelivered delivered = read(event, Events.OrderDelivered.class);
+                if (delivered.orderId() == null) {
+                    throw new MalformedEventException("OrderDelivered event without its orderId: " + event);
+                }
+                notifier.sendOnce(delivered.eventId(), emailComposer.orderDelivered(delivered));
+            }
             default -> {
                 // not an event that needs an email
             }

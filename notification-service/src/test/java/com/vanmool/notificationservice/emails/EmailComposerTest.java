@@ -101,6 +101,29 @@ class EmailComposerTest {
     }
 
     @Test
+    void shipped_namesTheCarrierAndTrackingNumber() {
+        Email email = composer.orderShipped(new Events.OrderShipped(UUID.randomUUID(), ORDER_ID, "asha@example.com",
+                "India Post", "EE123456789IN"));
+
+        assertEquals("Your Vanmool order 7c9e6679 is on its way", email.subject());
+        assertTrue(email.body().contains("It has been handed to India Post.\n"
+                + "Tracking number: EE123456789IN (on India Post's website)\n"), email.body());
+    }
+
+    @Test
+    void shippedWithoutATrackingNumber_hasNoTrackingLine_andDelivered_saysSo() {
+        Email shipped = composer.orderShipped(new Events.OrderShipped(UUID.randomUUID(), ORDER_ID, "asha@example.com",
+                "Dangs Artisan Cooperative", null));
+        Email delivered = composer.orderDelivered(new Events.OrderDelivered(UUID.randomUUID(), ORDER_ID, "asha@example.com"));
+
+        assertTrue(shipped.body().contains("It has been handed to Dangs Artisan Cooperative.\n\n"), shipped.body());
+        assertFalse(shipped.body().contains("Tracking number"), shipped.body());
+        assertEquals("Your Vanmool order 7c9e6679 is delivered", delivered.subject());
+        assertTrue(delivered.body().contains("Your order 7c9e6679-7425-40de-944b-e07fc1f90ae7 has been delivered."),
+                delivered.body());
+    }
+
+    @Test
     void receipt_showsTheAmountOrderTimeInIstGatewayAndReference() {
         // 10:15 UTC is 3:45 PM in India
         Email email = composer.paymentReceipt(new Events.PaymentSucceeded(UUID.randomUUID(),

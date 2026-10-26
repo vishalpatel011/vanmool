@@ -502,7 +502,7 @@ The order service (port 8083) turns the signed-in customer's cart into an order.
 |---|---|---|---|
 | POST | `/orders` | 201, the order, with `Location: /orders/{id}` | 400, 401, 409 cart empty, not enough stock or product no longer sold, 503 |
 | GET | `/orders?page=0&size=10` | 200, a page of the customer's orders, newest first (at most 50 per page) | 401 |
-| GET | `/orders/{id}` | 200, the order | 400 invalid id, 401, 404 |
+| GET | `/orders/{id}` | 200, the order, with its shipment and status history (order tracking) | 400 invalid id, 401, 404 |
 | POST | `/orders/{id}/cancel` | 200, the order, now `CANCELLED` | 400, 401, 404, 409 the order can no longer be cancelled |
 
 `POST /orders` takes only where to send the order; the products come from the cart and the prices from the product service, never from the client:
@@ -533,6 +533,10 @@ The order service (port 8083) turns the signed-in customer's cart into an order.
   ],
   "totalAmount": 999.98,
   "shippingAddress": { "name": "Asha Gamit", "phone": "9876543210", "...": "..." },
+  "shipment": null,
+  "statusHistory": [
+    { "status": "PENDING_PAYMENT", "changedAt": "2026-10-25T15:20:41.123456Z", "detail": null }
+  ],
   "createdAt": "2026-10-25T15:20:41.123456Z"
 }
 ```
@@ -554,7 +558,36 @@ PENDING_PAYMENT --(payment)--> CONFIRMED --> SHIPPED --> DELIVERED
        +--(cancel)--> CANCELLED
 ```
 
-The payment service's `PaymentSucceeded` event moves the order to `CONFIRMED` (see Payment Service API); a payment that arrives for an order that was cancelled in the meantime is logged as needing a refund. An order that is not paid within 60 minutes (`ORDER_PAYMENT_WINDOW`) is cancelled automatically and its stock goes back on sale. `SHIPPED` and `DELIVERED` arrive with the producer tools. Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win. The same transaction records an `OrderCancelled` event; the product service reads it and puts the reserved units back, retrying until it succeeds, so a product service that is down at that moment only delays the release. Cancelling a cancelled order again changes nothing.
+The payment service's `PaymentSucceeded` event moves the order to `CONFIRMED` (see Payment Service API); a payment that arrives for an order that was cancelled in the meantime is logged as needing a refund. An order that is not paid within 60 minutes (`ORDER_PAYMENT_WINDOW`) is cancelled automatically and its stock goes back on sale. `SHIPPED` and `DELIVERED` are set by Vanmool's operations team (see Order tracking). Only a `PENDING_PAYMENT` order can be cancelled: the status changes in one conditional `UPDATE`, so a cancel and a payment arriving together cannot both win. The same transaction records an `OrderCancelled` event; the product service reads it and puts the reserved units back, retrying until it succeeds, so a product service that is down at that moment only delays the release. Cancelling a cancelled order again changes nothing.
+
+### Order tracking
+
+Producers hand their products to Vanmool's operations team, who pack and send each paid order. One order can hold products from several producers, so the team ships it as a whole. These endpoints need a token with the `ADMIN` role:
+
+| Method | Path | Success | Errors |
+|---|---|---|---|
+| GET | `/admin/orders?status=CONFIRMED&page=0&size=20` | 200, a page of the orders in that status (default `CONFIRMED`: paid, waiting to be sent), oldest first | 400 unknown status, 401, 403 not an ADMIN |
+| POST | `/admin/orders/{id}/ship` | 200, the order, now `SHIPPED` | 400, 401, 403, 404, 409 not `CONFIRMED`, or already shipped with other details |
+| POST | `/admin/orders/{id}/deliver` | 200, the order, now `DELIVERED` | 401, 403, 404, 409 not `SHIPPED` |
+
+`POST /admin/orders/{id}/ship` takes the carrier and, if it gives one, the tracking number (letters, digits and hyphens). A cooperative delivering nearby orders itself has none:
+
+```json
+{ "carrier": "India Post", "trackingNumber": "EE123456789IN" }
+```
+
+The customer then sees in `GET /orders/{id}` how the order was sent and every step it went through:
+
+```json
+"shipment": { "carrier": "India Post", "trackingNumber": "EE123456789IN" },
+"statusHistory": [
+  { "status": "PENDING_PAYMENT", "changedAt": "2026-10-26T10:00:00Z", "detail": null },
+  { "status": "CONFIRMED", "changedAt": "2026-10-26T10:02:00Z", "detail": "Paid, payment 3b1f9a0e-5c2d-4e8f-9a7b-6c5d4e3f2a10" },
+  { "status": "SHIPPED", "changedAt": "2026-10-27T10:00:00Z", "detail": "India Post, tracking EE123456789IN" }
+]
+```
+
+Every status change adds a row to the order's history (`order_status_change`) in the same transaction as the change itself; rows are never changed. Shipping and delivering are conditional `UPDATE`s like cancelling: two people of the team clicking at the same moment ship the order once. Sending the same request again returns the order unchanged. Each change records an `OrderShipped` or `OrderDelivered` event, and the customer gets an email.
 
 Errors use the same format as the other services. Codes: `INVALID_TOKEN` (401), `FORBIDDEN` (403), `ORDER_NOT_FOUND` (404), `CART_EMPTY`, `INSUFFICIENT_STOCK`, `PRODUCT_UNAVAILABLE` and `INVALID_ORDER_STATE` (409), `CART_SERVICE_UNAVAILABLE` and `PRODUCT_SERVICE_UNAVAILABLE` (503), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
 
@@ -619,6 +652,8 @@ Services tell each other what happened through Kafka, when the sender does not n
 | `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
 | `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation) |
 | `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount`, `reason` (`CUSTOMER` or `PAYMENT_TIMEOUT`) | order id | product-service (puts the stock back), payment-service (closes the open payment link), notification-service |
+| `order-events` | order-service | `OrderShipped`: `orderId`, `userId`, `customerEmail`, `carrier`, `trackingNumber` (may be null) | order id | notification-service |
+| `order-events` | order-service | `OrderDelivered`: `orderId`, `userId`, `customerEmail` | order id | notification-service |
 | `payment-events` | payment-service | `PaymentSucceeded`: `paymentId`, `orderId`, `userId`, `customerEmail`, `amount`, `currency`, `gateway`, `gatewayPaymentId` | order id | order-service (confirms the order), notification-service (receipt) |
 | `payment-events` | payment-service | `PaymentFailed`: `paymentId`, `orderId`, `customerEmail`, `amount`, `reason` (`FAILED` or `EXPIRED`) | order id | notification-service |
 
@@ -644,18 +679,20 @@ MSYS_NO_PATHCONV=1 docker compose exec kafka /opt/kafka/bin/kafka-console-consum
 
 ## Notification Service
 
-The notification service has no API. It reads `user-events` and `order-events` from Kafka and sends an email for each event a customer should hear about:
+The notification service has no API. It reads `user-events`, `order-events` and `payment-events` from Kafka and sends an email for each event a customer should hear about:
 
 | Event | Email |
 |---|---|
 | `UserRegistered` | "Welcome to Vanmool", to the new account's address |
 | `OrderPlaced` | "Your Vanmool order 7c9e6679 is placed": each product with its quantity and line total, the total in rupees (₹1,359.98), and the delivery address |
 | `OrderCancelled` | "Your Vanmool order 7c9e6679 is cancelled", saying so when the payment did not arrive in time |
+| `OrderShipped` | "Your Vanmool order 7c9e6679 is on its way": the carrier and the tracking number |
+| `OrderDelivered` | "Your Vanmool order 7c9e6679 is delivered" |
 | `PaymentSucceeded` | "Payment received for your Vanmool order 7c9e6679": amount, order, time (IST), gateway and the gateway's payment reference |
 | `PaymentFailed` | "Your Vanmool payment did not go through": no money taken, and how to try again |
 
 - **Each email once.** Kafka can deliver an event twice. The service records the id of every event whose email went out in Redis (`notification:event:{eventId}`, kept 7 days) and skips an event it has seen. The record is written after the email was sent: if the mail server fails, nothing is recorded and the event is tried again. If Redis itself is unreachable, the email is sent anyway (one email too many is better than none).
-- **Failures.** An email that cannot be sent is tried again every 2 seconds, 10 times, then the event is published to `user-events.notification-service.DLT` or `order-events.notification-service.DLT`. A message that is not a valid event goes there at once.
+- **Failures.** An email that cannot be sent is tried again every 2 seconds, 10 times, then the event is published to `user-events.notification-service.DLT`, `order-events.notification-service.DLT` or `payment-events.notification-service.DLT`. A message that is not a valid event goes there at once.
 - **SMTP.** Locally the emails go to Mailpit: open http://localhost:8025 to read them. In a deployment the same settings point at a real SMTP service such as Amazon SES.
 
 | Variable | Description | Default |
@@ -708,8 +745,9 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Payment Service: Razorpay and Stripe (test mode), signed webhooks, callbacks, reconciliation, one open payment per order, unpaid orders cancelled after an hour
 - [x] Cart service: carts in Redis, current prices from the product service, JWTs checked with the user-auth service's public keys
 - [x] Order service: checkout from the cart with stock reservations, Idempotency-Key, order history, cancellation
+- [x] Order tracking: the operations team ships and delivers orders (carrier, tracking number); each order keeps its status history
 - [x] Stock and stock reservations (inside the product service)
-- [x] Notification service: welcome, order and cancellation emails from Kafka events, each sent once
+- [x] Notification service: welcome, order, payment, cancellation, shipping and delivery emails from Kafka events, each sent once
 - [ ] Spring Cloud: Eureka service discovery and API Gateway
 - [ ] Docker and Docker Compose
 
@@ -717,5 +755,5 @@ In the cart service, the call to the product service is tested against `MockRest
 
 - Producer onboarding and tools for producers to manage their own listings
 - Richer product search and recommendations
-- Logistics and shipping integration
+- Logistics integration: book shipments and receive delivery updates from the carriers' APIs instead of the operations team
 - Web and mobile clients

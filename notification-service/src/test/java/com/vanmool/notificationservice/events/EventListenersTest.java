@@ -99,6 +99,26 @@ class EventListenersTest {
     }
 
     @Test
+    void orderShipped_andOrderDelivered_sendTheirEmails() throws Exception {
+        // Act: the JSON order-service publishes
+        listeners.onOrderEvent("""
+                { "eventId": "0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10", "eventType": "OrderShipped",
+                  "occurredAt": "2026-10-27T05:30:00Z", "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                  "userId": "a8c1e6ff-556d-4dd2-a238-148b3fca351c", "customerEmail": "asha@example.com",
+                  "carrier": "India Post", "trackingNumber": "EE123456789IN" }""");
+        listeners.onOrderEvent("""
+                { "eventId": "1c7f4d2f-9b1e-4a8f-8b62-4d3b7f9e0a21", "eventType": "OrderDelivered",
+                  "occurredAt": "2026-10-29T09:00:00Z", "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                  "userId": "a8c1e6ff-556d-4dd2-a238-148b3fca351c", "customerEmail": "asha@example.com" }""");
+
+        // Assert
+        ArgumentCaptor<Email> emails = ArgumentCaptor.forClass(Email.class);
+        verify(emailSender, org.mockito.Mockito.times(2)).send(emails.capture());
+        assertEquals("Your Vanmool order 7c9e6679 is on its way", emails.getAllValues().get(0).subject());
+        assertEquals("Your Vanmool order 7c9e6679 is delivered", emails.getAllValues().get(1).subject());
+    }
+
+    @Test
     void paymentSucceeded_sendsTheReceipt_andPaymentFailed_sendsTheFailureEmail() throws Exception {
         // Act
         listeners.onPaymentEvent("""
@@ -155,7 +175,7 @@ class EventListenersTest {
     void eventsThatNeedNoEmail_areIgnored() throws Exception {
         // Act
         listeners.onUserEvent("{ \"eventId\": \"0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10\", \"eventType\": \"UserDeleted\" }");
-        listeners.onOrderEvent("{ \"eventId\": \"0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10\", \"eventType\": \"OrderShipped\" }");
+        listeners.onOrderEvent("{ \"eventId\": \"0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10\", \"eventType\": \"OrderReturned\" }");
 
         // Assert
         verifyNoInteractions(emailSender, handledEvents);
@@ -169,6 +189,9 @@ class EventListenersTest {
                 () -> listeners.onUserEvent("{ \"eventType\": \"UserRegistered\", \"email\": \"asha@example.com\" }"));
         assertThrows(MalformedEventException.class, () -> listeners.onOrderEvent(
                 "{ \"eventId\": \"0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10\", \"eventType\": \"OrderPlaced\" }"));
+        assertThrows(MalformedEventException.class, () -> listeners.onOrderEvent(
+                "{ \"eventId\": \"0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10\", \"eventType\": \"OrderShipped\", "
+                        + "\"orderId\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\" }"));
         verifyNoInteractions(emailSender);
     }
 }

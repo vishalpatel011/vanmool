@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanmool.orderservice.clients.CartClient;
 import com.vanmool.orderservice.clients.ProductClient;
+import com.vanmool.orderservice.services.OrderService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -20,6 +22,7 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -54,6 +57,9 @@ class OrderFlowIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private OrderService orderService;
+
     @MockitoBean
     private CartClient cartClient;
 
@@ -76,6 +82,7 @@ class OrderFlowIT {
     @AfterEach
     void removeOrders() {
         jdbcTemplate.update("DELETE FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.userId') = ?", userId.toString());
+        jdbcTemplate.update("DELETE c FROM order_status_change c JOIN orders o ON o.id = c.order_id WHERE o.user_id = UUID_TO_BIN(?)", userId.toString());
         jdbcTemplate.update("DELETE i FROM order_item i JOIN orders o ON o.id = i.order_id WHERE o.user_id = UUID_TO_BIN(?)", userId.toString());
         jdbcTemplate.update("DELETE FROM orders WHERE user_id = UUID_TO_BIN(?)", userId.toString());
     }
@@ -154,5 +161,45 @@ class OrderFlowIT {
         mockMvc.perform(post("/orders/{id}/cancel", orderId).with(someoneElse)).andExpect(status().isNotFound());
         assertEquals("PENDING_PAYMENT", jdbcTemplate.queryForObject(
                 "SELECT status FROM orders WHERE id = UUID_TO_BIN(?)", String.class, orderId));
+    }
+
+    @Test
+    void paidOrder_isShippedAndDelivered_andTheCustomerCanFollowIt() throws Exception {
+        // Arrange: a placed order, paid (what PaymentSucceeded does)
+        String orderId = placeOrder(null);
+        orderService.confirmPayment(UUID.fromString(orderId), UUID.randomUUID());
+        RequestPostProcessor admin = jwt().jwt(token -> token.subject(UUID.randomUUID().toString()))
+                .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+
+        // The order is in the team's queue of orders to send; the customer cannot open that queue
+        mockMvc.perform(get("/admin/orders").param("size", "50").with(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[?(@.id == '" + orderId + "')]", hasSize(1)));
+        mockMvc.perform(get("/admin/orders").with(customer())).andExpect(status().isForbidden());
+
+        // Ship, then deliver
+        mockMvc.perform(post("/admin/orders/{id}/ship", orderId).with(admin).contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                { "carrier": "India Post", "trackingNumber": "EE123456789IN" }"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SHIPPED"));
+        mockMvc.perform(get("/orders/{id}", orderId).with(customer()))
+                .andExpect(jsonPath("$.shipment.carrier").value("India Post"))
+                .andExpect(jsonPath("$.shipment.trackingNumber").value("EE123456789IN"))
+                .andExpect(jsonPath("$.statusHistory[*].status", contains("PENDING_PAYMENT", "CONFIRMED", "SHIPPED")))
+                .andExpect(jsonPath("$.statusHistory[2].detail").value("India Post, tracking EE123456789IN"));
+        mockMvc.perform(post("/admin/orders/{id}/deliver", orderId).with(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELIVERED"));
+
+        // A delivered order can no longer be cancelled; its timeline is complete
+        mockMvc.perform(post("/orders/{id}/cancel", orderId).with(customer())).andExpect(status().isConflict());
+        mockMvc.perform(get("/orders").with(customer()))
+                .andExpect(jsonPath("$.content[0].statusHistory[*].status",
+                        contains("PENDING_PAYMENT", "CONFIRMED", "SHIPPED", "DELIVERED")));
+
+        // One event per change, for notification-service to email the customer
+        assertEquals(List.of("OrderPlaced", "OrderShipped", "OrderDelivered"), jdbcTemplate.queryForList(
+                "SELECT event_type FROM outbox_event WHERE message_key = ? ORDER BY created_at", String.class, orderId));
     }
 }

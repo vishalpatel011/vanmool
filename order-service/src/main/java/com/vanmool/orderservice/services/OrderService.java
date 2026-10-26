@@ -14,7 +14,9 @@ import com.vanmool.orderservice.events.OrderPlacedEvent;
 import com.vanmool.orderservice.events.OutboxWriter;
 import com.vanmool.orderservice.models.Order;
 import com.vanmool.orderservice.models.OrderStatus;
+import com.vanmool.orderservice.models.OrderStatusChange;
 import com.vanmool.orderservice.repositories.OrderRepository;
+import com.vanmool.orderservice.repositories.OrderStatusChangeRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -41,11 +43,15 @@ import java.util.UUID;
 //   4. empty the cart (cart-service)                          fails: logged; the order stands, the cart stays full
 // Reserve and release are keyed by the order id, so repeating them is always safe. The OrderPlaced event goes to
 // Kafka through the outbox: it exists exactly when the order exists.
+// Every status the order reaches is also added to its timeline (order_status_change), in the same transaction as the
+// change itself.
 // Remote calls are made outside any database transaction, so no database connection waits on another service.
 @Slf4j
 @Service
 public class OrderService {
     private final OrderRepository orderRepository;
+    private final OrderStatusChangeRepository statusChangeRepository;
+    private final OrderResponses orderResponses;
     private final CartClient cartClient;
     private final ProductClient productClient;
     private final OutboxWriter outboxWriter;
@@ -53,10 +59,13 @@ public class OrderService {
     private final Clock clock;
     private final Duration paymentWindow;
 
-    public OrderService(OrderRepository orderRepository, CartClient cartClient, ProductClient productClient,
+    public OrderService(OrderRepository orderRepository, OrderStatusChangeRepository statusChangeRepository,
+                        OrderResponses orderResponses, CartClient cartClient, ProductClient productClient,
                         OutboxWriter outboxWriter, TransactionTemplate transactionTemplate, Clock clock,
                         @Value("${order.payment-window}") Duration paymentWindow) {
         this.orderRepository = orderRepository;
+        this.statusChangeRepository = statusChangeRepository;
+        this.orderResponses = orderResponses;
         this.cartClient = cartClient;
         this.productClient = productClient;
         this.outboxWriter = outboxWriter;
@@ -72,7 +81,7 @@ public class OrderService {
         if (idempotencyKey != null) {
             Optional<Order> existing = orderRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey);
             if (existing.isPresent()) {
-                return OrderResponseDto.from(existing.get());
+                return orderResponses.of(existing.get());
             }
         }
 
@@ -105,6 +114,7 @@ public class OrderService {
         try {
             saved = transactionTemplate.execute(status -> {
                 Order inserted = orderRepository.saveAndFlush(order);
+                statusChangeRepository.save(OrderStatusChange.of(orderId, OrderStatus.PENDING_PAYMENT, clock.instant(), null));
                 outboxWriter.add(KafkaConfig.ORDER_EVENTS_TOPIC, orderId.toString(),
                         OrderPlacedEvent.of(inserted, customer.email(), clock.instant()));
                 return inserted;
@@ -115,7 +125,7 @@ public class OrderService {
             if (idempotencyKey != null) {
                 Optional<Order> first = orderRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey);
                 if (first.isPresent()) {
-                    return OrderResponseDto.from(first.get());
+                    return orderResponses.of(first.get());
                 }
             }
             throw e;
@@ -129,7 +139,7 @@ public class OrderService {
         } catch (RuntimeException e) {
             log.warn("Order {} was placed, but the cart of user {} could not be emptied: {}", orderId, userId, e.getMessage());
         }
-        return OrderResponseDto.from(saved);
+        return orderResponses.of(saved);
     }
 
     // Newest first, always: order history has one natural order. The id breaks ties, so pages never overlap
@@ -138,11 +148,12 @@ public class OrderService {
         Pageable newestFirst = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
                 Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id")));
         // Mapped inside the transaction: the items of the whole page are loaded here, in one batch query
-        return orderRepository.findByUserId(userId, newestFirst).map(OrderResponseDto::from);
+        return orderResponses.of(orderRepository.findByUserId(userId, newestFirst));
     }
 
+    // With its timeline: this is how the customer tracks the order (PRD 4.3)
     public OrderResponseDto getOrder(UUID userId, UUID orderId) {
-        return OrderResponseDto.from(findOrder(userId, orderId));
+        return orderResponses.of(findOrder(userId, orderId));
     }
 
     // Marks the order cancelled and records OrderCancelled in one transaction. The status change is one conditional
@@ -154,7 +165,7 @@ public class OrderService {
     public OrderResponseDto cancelOrder(Customer customer, UUID orderId) {
         Order order = findOrder(customer.id(), orderId);
         if (order.getStatus() == OrderStatus.CANCELLED) {
-            return OrderResponseDto.from(order);
+            return orderResponses.of(order);
         }
         if (!order.getStatus().canMoveTo(OrderStatus.CANCELLED)) {
             throw new InvalidOrderStateException("An order that is " + order.getStatus() + " cannot be cancelled");
@@ -163,18 +174,26 @@ public class OrderService {
             if (orderRepository.moveStatus(orderId, order.getStatus(), OrderStatus.CANCELLED) == 0) {
                 throw new InvalidOrderStateException("The order changed while it was being cancelled; check its status");
             }
+            statusChangeRepository.save(OrderStatusChange.of(orderId, OrderStatus.CANCELLED, clock.instant(),
+                    "Cancelled by the customer"));
             outboxWriter.add(KafkaConfig.ORDER_EVENTS_TOPIC, orderId.toString(), OrderCancelledEvent.of(order,
                     order.getCustomerEmail() != null ? order.getCustomerEmail() : customer.email(),
                     OrderCancelledEvent.BY_CUSTOMER, clock.instant()));
         });
-        return OrderResponseDto.from(findOrder(customer.id(), orderId));
+        return orderResponses.of(findOrder(customer.id(), orderId));
     }
 
     // PaymentSucceeded from payment-service: the order is paid. Kafka may deliver the event twice and the conditional
     // UPDATE makes the second one change nothing
     public void confirmPayment(UUID orderId, UUID paymentId) {
-        int moved = transactionTemplate.execute(status ->
-                orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED));
+        int moved = transactionTemplate.execute(status -> {
+            if (orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED) == 0) {
+                return 0;
+            }
+            statusChangeRepository.save(OrderStatusChange.of(orderId, OrderStatus.CONFIRMED, clock.instant(),
+                    "Paid, payment " + paymentId));
+            return 1;
+        });
         if (moved == 1) {
             log.info("Order {} is CONFIRMED (payment {})", orderId, paymentId);
             return;
@@ -199,6 +218,8 @@ public class OrderService {
                 if (orderRepository.moveStatus(order.getId(), OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED) == 0) {
                     return false;
                 }
+                statusChangeRepository.save(OrderStatusChange.of(order.getId(), OrderStatus.CANCELLED, clock.instant(),
+                        "Not paid within " + paymentWindow.toMinutes() + " minutes"));
                 outboxWriter.add(KafkaConfig.ORDER_EVENTS_TOPIC, order.getId().toString(), OrderCancelledEvent.of(order,
                         order.getCustomerEmail(), OrderCancelledEvent.PAYMENT_TIMEOUT, clock.instant()));
                 return true;

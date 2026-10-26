@@ -15,8 +15,10 @@ import com.vanmool.orderservice.events.OrderPlacedEvent;
 import com.vanmool.orderservice.events.OutboxWriter;
 import com.vanmool.orderservice.models.Order;
 import com.vanmool.orderservice.models.OrderStatus;
+import com.vanmool.orderservice.models.OrderStatusChange;
 import com.vanmool.orderservice.models.ShippingAddress;
 import com.vanmool.orderservice.repositories.OrderRepository;
+import com.vanmool.orderservice.repositories.OrderStatusChangeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -74,6 +76,9 @@ class OrderServiceTest {
     private OrderRepository orderRepository;
 
     @Mock
+    private OrderStatusChangeRepository statusChangeRepository;
+
+    @Mock
     private CartClient cartClient;
 
     @Mock
@@ -84,10 +89,12 @@ class OrderServiceTest {
 
     private OrderService orderService;
 
-    // A real TransactionTemplate around a mocked transaction manager: the callback runs, no database is involved
+    // A real TransactionTemplate around a mocked transaction manager: the callback runs, no database is involved.
+    // The timeline repository is a mock too: its reads return an empty list unless a test says otherwise
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, cartClient, productClient, outboxWriter,
+        orderService = new OrderService(orderRepository, statusChangeRepository, new OrderResponses(statusChangeRepository),
+                cartClient, productClient, outboxWriter,
                 new TransactionTemplate(mock(PlatformTransactionManager.class)), Clock.fixed(NOW, ZoneOffset.UTC),
                 java.time.Duration.ofMinutes(60));
     }
@@ -123,6 +130,13 @@ class OrderServiceTest {
         when(orderRepository.saveAndFlush(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
+    // The one timeline row the test's action added
+    private OrderStatusChange addedToTimeline() {
+        ArgumentCaptor<OrderStatusChange> change = ArgumentCaptor.forClass(OrderStatusChange.class);
+        verify(statusChangeRepository).save(change.capture());
+        return change.getValue();
+    }
+
     @Nested
     @DisplayName("placeOrder")
     class PlaceOrder {
@@ -143,6 +157,11 @@ class OrderServiceTest {
                     order.items().stream().map(item -> item.lineTotal()).toList());
             assertEquals("Ragi Biscuits", order.items().get(1).name());
             verify(cartClient).clearCart(TOKEN);
+            // The first step of its timeline
+            OrderStatusChange placed = addedToTimeline();
+            assertEquals(order.id(), placed.getOrderId());
+            assertEquals(OrderStatus.PENDING_PAYMENT, placed.getStatus());
+            assertEquals(NOW, placed.getChangedAt());
         }
 
         @Test
@@ -338,10 +357,14 @@ class OrderServiceTest {
             // Act
             OrderResponseDto order = orderService.cancelOrder(CUSTOMER, orderId);
 
-            // Assert: the status change first, then the event, in one transaction; no direct call to product-service
-            InOrder steps = inOrder(orderRepository, outboxWriter);
+            // Assert: the status change first, then the timeline and the event, in one transaction; no direct call
+            // to product-service
+            InOrder steps = inOrder(orderRepository, statusChangeRepository, outboxWriter);
             steps.verify(orderRepository).moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED);
+            steps.verify(statusChangeRepository).save(any(OrderStatusChange.class));
             steps.verify(outboxWriter).add(eq("order-events"), eq(orderId.toString()), event.capture());
+            assertEquals(OrderStatus.CANCELLED, addedToTimeline().getStatus());
+            assertEquals("Cancelled by the customer", addedToTimeline().getDetail());
             assertEquals("OrderCancelled", event.getValue().eventType());
             assertEquals("CUSTOMER", event.getValue().reason());
             assertEquals(orderId, event.getValue().orderId());
@@ -371,9 +394,10 @@ class OrderServiceTest {
             when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(Optional.of(order(orderId, OrderStatus.PENDING_PAYMENT)));
             when(orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED)).thenReturn(0);
 
-            // Act & Assert: and no event, since nothing was cancelled
+            // Act & Assert: and no event or timeline row, since nothing was cancelled
             assertThrows(InvalidOrderStateException.class, () -> orderService.cancelOrder(CUSTOMER, orderId));
             verifyNoInteractions(productClient, outboxWriter);
+            verify(statusChangeRepository, never()).save(any());
         }
 
         @Test
@@ -411,10 +435,13 @@ class OrderServiceTest {
             UUID orderId = UUID.randomUUID();
             when(orderRepository.moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED)).thenReturn(1);
 
-            orderService.confirmPayment(orderId, UUID.randomUUID());
+            UUID paymentId = UUID.randomUUID();
+            orderService.confirmPayment(orderId, paymentId);
 
             verify(orderRepository).moveStatus(orderId, OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED);
             verify(orderRepository, never()).findById(any());
+            assertEquals(OrderStatus.CONFIRMED, addedToTimeline().getStatus());
+            assertEquals("Paid, payment " + paymentId, addedToTimeline().getDetail());
         }
 
         @Test
@@ -430,6 +457,7 @@ class OrderServiceTest {
             orderService.confirmPayment(cancelledId, UUID.randomUUID());
 
             verifyNoInteractions(outboxWriter);
+            verify(statusChangeRepository, never()).save(any());
         }
 
         @Test
@@ -452,17 +480,30 @@ class OrderServiceTest {
             verify(outboxWriter).add(eq("order-events"), eq(unpaid.getId().toString()), event.capture());
             assertEquals("PAYMENT_TIMEOUT", event.getValue().reason());
             assertEquals("asha@example.com", event.getValue().customerEmail());
+            OrderStatusChange change = addedToTimeline();
+            assertEquals(unpaid.getId(), change.getOrderId());
+            assertEquals("Not paid within 60 minutes", change.getDetail());
         }
     }
 
     @Test
-    void getOrder_returnsTheCustomersOrder() {
+    void getOrder_returnsTheCustomersOrder_withItsTimeline() {
         // Arrange
         UUID orderId = UUID.randomUUID();
-        when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(Optional.of(order(orderId, OrderStatus.PENDING_PAYMENT)));
+        when(orderRepository.findByIdAndUserId(orderId, USER_ID)).thenReturn(Optional.of(order(orderId, OrderStatus.CONFIRMED)));
+        when(statusChangeRepository.findByOrderIdOrderByChangedAtAsc(orderId)).thenReturn(List.of(
+                OrderStatusChange.of(orderId, OrderStatus.PENDING_PAYMENT, NOW, null),
+                OrderStatusChange.of(orderId, OrderStatus.CONFIRMED, NOW.plusSeconds(300), "Paid, payment 1")));
 
-        // Act & Assert
-        assertEquals(orderId, orderService.getOrder(USER_ID, orderId).id());
+        // Act
+        OrderResponseDto order = orderService.getOrder(USER_ID, orderId);
+
+        // Assert
+        assertEquals(orderId, order.id());
+        assertEquals(List.of(OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED),
+                order.statusHistory().stream().map(change -> change.status()).toList());
+        assertEquals(NOW.plusSeconds(300), order.statusHistory().get(1).changedAt());
+        assertNull(order.shipment());
     }
 
     @Test
@@ -472,12 +513,16 @@ class OrderServiceTest {
         ArgumentCaptor<Pageable> used = ArgumentCaptor.forClass(Pageable.class);
         Order order = order(UUID.randomUUID(), OrderStatus.PENDING_PAYMENT);
         when(orderRepository.findByUserId(eq(USER_ID), used.capture())).thenReturn(new PageImpl<>(List.of(order)));
+        when(statusChangeRepository.findByOrderIdInOrderByChangedAtAsc(List.of(order.getId()))).thenReturn(
+                List.of(OrderStatusChange.of(order.getId(), OrderStatus.PENDING_PAYMENT, NOW, null)));
 
         // Act
         var page = orderService.getOrders(USER_ID, requested);
 
-        // Assert
+        // Assert: and the timelines of the whole page came from one query
         assertEquals(PageRequest.of(2, 5, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id"))), used.getValue());
         assertSame(order.getId(), page.getContent().get(0).id());
+        assertEquals(1, page.getContent().get(0).statusHistory().size());
+        verify(statusChangeRepository, never()).findByOrderIdOrderByChangedAtAsc(any());
     }
 }

@@ -43,6 +43,11 @@ public class Order {
     private String customerEmail;
     @Embedded
     private ShippingAddress shippingAddress;
+    // Set when the order is handed to the carrier (SHIPPED); the tracking number may be missing (local delivery)
+    @Column(length = 100)
+    private String carrier;
+    @Column(length = 50)
+    private String trackingNumber;
     // The items belong to the order: saved and deleted with it (cascade), never shared.
     // LAZY. A single order is read with its items in one query (@EntityGraph in OrderRepository). For a page of order
     // history, @BatchSize loads the items of all orders on the page in one more query, instead of one query per order

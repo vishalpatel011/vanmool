@@ -4,6 +4,7 @@ import com.vanmool.orderservice.configs.SecurityConfig;
 import com.vanmool.orderservice.dtos.OrderItemResponseDto;
 import com.vanmool.orderservice.dtos.OrderResponseDto;
 import com.vanmool.orderservice.dtos.ShippingAddressDto;
+import com.vanmool.orderservice.dtos.StatusChangeDto;
 import com.vanmool.orderservice.exceptions.CartEmptyException;
 import com.vanmool.orderservice.exceptions.CartServiceUnavailableException;
 import com.vanmool.orderservice.exceptions.InsufficientStockException;
@@ -90,7 +91,9 @@ class OrderControllerWebMvcTest {
         return new OrderResponseDto(ORDER_ID, status,
                 List.of(new OrderItemResponseDto(BASKET_ID, "Handcrafted Bamboo Basket", new BigDecimal("499.99"), 2,
                         new BigDecimal("999.98"))),
-                new BigDecimal("999.98"), ADDRESS, Instant.parse("2026-10-25T10:00:00Z"));
+                new BigDecimal("999.98"), ADDRESS, null,
+                List.of(new StatusChangeDto(OrderStatus.PENDING_PAYMENT, Instant.parse("2026-10-25T10:00:00Z"), null)),
+                Instant.parse("2026-10-25T10:00:00Z"));
     }
 
     @Test
@@ -138,6 +141,10 @@ class OrderControllerWebMvcTest {
                                 "state": "Gujarat",
                                 "pincode": "394710"
                               },
+                              "shipment": null,
+                              "statusHistory": [
+                                { "status": "PENDING_PAYMENT", "changedAt": "2026-10-25T10:00:00Z", "detail": null }
+                              ],
                               "createdAt": "2026-10-25T10:00:00Z"
                             }""", JsonCompareMode.STRICT));
         }

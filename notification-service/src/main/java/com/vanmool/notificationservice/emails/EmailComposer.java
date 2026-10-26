@@ -86,6 +86,31 @@ public class EmailComposer {
                 + " is cancelled", body);
     }
 
+    // Order tracking (PRD 4.3): who carries the order, and the number to follow it with on the carrier's site
+    public Email orderShipped(Events.OrderShipped event) {
+        String tracking = event.trackingNumber() == null ? ""
+                : "\nTracking number: " + event.trackingNumber() + " (on " + event.carrier() + "'s website)";
+        String body = """
+                Hello,
+
+                Your order %s is on its way. It has been handed to %s.%s
+
+                You can follow it in your orders on Vanmool too.
+                """.formatted(event.orderId(), event.carrier(), tracking) + SIGNATURE;
+        return new Email(event.customerEmail(), "Your Vanmool order " + event.orderId().toString().substring(0, 8)
+                + " is on its way", body);
+    }
+
+    public Email orderDelivered(Events.OrderDelivered event) {
+        String body = """
+                Hello,
+
+                Your order %s has been delivered. Thank you for buying from the producers of Vanmool.
+                """.formatted(event.orderId()) + SIGNATURE;
+        return new Email(event.customerEmail(), "Your Vanmool order " + event.orderId().toString().substring(0, 8)
+                + " is delivered", body);
+    }
+
     // The receipt (PRD 5.3): what was paid, for which order, how, and the gateway's reference for any question
     public Email paymentReceipt(Events.PaymentSucceeded event) {
         String paidAt = event.occurredAt() == null ? ""

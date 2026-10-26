@@ -6,9 +6,9 @@ package com.vanmool.orderservice.models;
 //          |
 //          +--(customer cancels, or payment fails)--> CANCELLED
 //
-// PENDING_PAYMENT: placed, the stock is reserved, waiting for payment. CONFIRMED will be set by the payment service
-// (Days 220-221); SHIPPED and DELIVERED by producers. Cancelling a CONFIRMED order needs a refund, which comes with the
-// payment service, so it is not allowed yet.
+// PENDING_PAYMENT: placed, the stock is reserved, waiting for payment. CONFIRMED is set when payment-service reports
+// the payment; SHIPPED and DELIVERED by Vanmool's operations team (ADMIN), who send the orders the producers hand over.
+// Cancelling a CONFIRMED order needs a refund, which is not implemented, so it is not allowed.
 public enum OrderStatus {
     PENDING_PAYMENT,
     CONFIRMED,

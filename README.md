@@ -206,6 +206,8 @@ Each service reads its settings from the environment of its own process, so the 
 | `CART_SERVICE_URL` | Base URL of cart-service: a service name, resolved through Eureka | not used | not used | not used | `http://cart-service` |
 | `EUREKA_URL` | Where the service registers and reads the registry | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` |
 
+The API gateway reads `EUREKA_URL`, `SERVER_PORT` (default `8000`) and `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` (for its rate limits).
+
 - **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
 - **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
 
@@ -269,6 +271,10 @@ Clients use one address, `http://localhost:8000` (Spring Cloud Gateway on WebFlu
 
   The messages carry no host names or exception texts.
 - **Retries.** A `GET` whose instance cannot be reached is tried once more on the next instance, as the services do among themselves. A service's own error answer is passed on as it is.
+- **Rate limits on signing in.** `POST /auth/login`, `/auth/signup`, `/auth/password-reset` and `/auth/password-reset/confirm` together accept at most 10 requests a minute from one client address. Over the limit, the answer is `429 Too Many Requests` and the request never reaches the user-auth service. This slows down password guessing and stops a stranger from flooding someone's mailbox with reset links (the user-auth service also sends at most 3 links per account per hour). The response headers show the remaining budget (`X-RateLimit-Remaining`, in tokens of 6 per request). Other requests, including the page a reset link opens, are not limited.
+  - The counters live in Redis (a token bucket, Spring Cloud Gateway's `RedisRateLimiter`), so several gateway instances share them.
+  - If Redis is down, requests are let through rather than refused, and the gateway stays healthy.
+  - Behind a load balancer, the client's address must be taken from `X-Forwarded-For`, which only the load balancer may set.
 - **Time limits.** 1 second to connect to a service, 10 seconds for its answer (starting a payment calls a payment gateway).
 
 ## Product Service API

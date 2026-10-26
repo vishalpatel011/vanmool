@@ -122,7 +122,7 @@ class OrderServiceTest {
 
     // The order id is chosen inside placeOrder; the reservation echoes whatever id it was given
     private void reservationSucceeds() {
-        when(productClient.reserve(any(UUID.class), eq(twoBasketsAndThreePackets())))
+        when(productClient.reserve(any(UUID.class), eq(twoBasketsAndThreePackets()), eq(TOKEN)))
                 .thenAnswer(invocation -> reservation(invocation.getArgument(0)));
     }
 
@@ -200,7 +200,7 @@ class OrderServiceTest {
             OrderResponseDto order = orderService.placeOrder(CUSTOMER, ADDRESS, "checkout-1");
 
             // Assert
-            verify(productClient).reserve(reservedUnder.capture(), any());
+            verify(productClient).reserve(reservedUnder.capture(), any(), eq(TOKEN));
             assertEquals(reservedUnder.getValue(), saved.getValue().getId());
             assertEquals(order.id(), saved.getValue().getId());
             assertEquals(USER_ID, saved.getValue().getUserId());
@@ -237,13 +237,13 @@ class OrderServiceTest {
         void notEnoughStock_failsAndSavesNothing_andNeedsNoRelease() {
             // Arrange: product-service took nothing (all or nothing), so there is nothing to give back
             when(cartClient.getCartLines(TOKEN)).thenReturn(twoBasketsAndThreePackets());
-            when(productClient.reserve(any(UUID.class), any()))
+            when(productClient.reserve(any(UUID.class), any(), any()))
                     .thenThrow(new InsufficientStockException("Not enough stock for products [" + BISCUITS_ID + "]"));
 
             // Act & Assert
             assertThrows(InsufficientStockException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
             verify(orderRepository, never()).saveAndFlush(any());
-            verify(productClient, never()).release(any());
+            verify(productClient, never()).release(any(), any());
             verify(cartClient, never()).clearCart(any());
         }
 
@@ -252,12 +252,12 @@ class OrderServiceTest {
             // Arrange
             when(cartClient.getCartLines(TOKEN)).thenReturn(twoBasketsAndThreePackets());
             ArgumentCaptor<UUID> orderId = ArgumentCaptor.forClass(UUID.class);
-            when(productClient.reserve(orderId.capture(), any()))
+            when(productClient.reserve(orderId.capture(), any(), any()))
                     .thenThrow(new ProductServiceUnavailableException(new RuntimeException("Read timed out")));
 
             // Act & Assert
             assertThrows(ProductServiceUnavailableException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
-            verify(productClient).release(orderId.getValue());
+            verify(productClient).release(orderId.getValue(), TOKEN);
             verify(orderRepository, never()).saveAndFlush(any());
         }
 
@@ -274,8 +274,8 @@ class OrderServiceTest {
             assertThrows(DataAccessResourceFailureException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
 
             // Assert: the units reserved under this order id are released, the cart is kept, no event recorded
-            verify(productClient).reserve(orderId.capture(), any());
-            verify(productClient).release(orderId.getValue());
+            verify(productClient).reserve(orderId.capture(), any(), any());
+            verify(productClient).release(orderId.getValue(), TOKEN);
             verify(cartClient, never()).clearCart(any());
             verifyNoInteractions(outboxWriter);
         }
@@ -287,7 +287,7 @@ class OrderServiceTest {
             reservationSucceeds();
             when(orderRepository.saveAndFlush(any(Order.class)))
                     .thenThrow(new DataAccessResourceFailureException("Communications link failure"));
-            doThrow(new ProductServiceUnavailableException(new RuntimeException("down"))).when(productClient).release(any());
+            doThrow(new ProductServiceUnavailableException(new RuntimeException("down"))).when(productClient).release(any(), any());
 
             // Act & Assert: the database error, not the release error, reaches the client
             assertThrows(DataAccessResourceFailureException.class, () -> orderService.placeOrder(CUSTOMER, ADDRESS, null));
@@ -303,7 +303,7 @@ class OrderServiceTest {
 
             // Act & Assert
             assertEquals(OrderStatus.PENDING_PAYMENT, orderService.placeOrder(CUSTOMER, ADDRESS, null).status());
-            verify(productClient, never()).release(any());
+            verify(productClient, never()).release(any(), any());
         }
 
         @Test
@@ -337,8 +337,8 @@ class OrderServiceTest {
 
             // Assert
             assertEquals(first.getId(), order.id());
-            verify(productClient).reserve(secondOrderId.capture(), any());
-            verify(productClient).release(secondOrderId.getValue());
+            verify(productClient).reserve(secondOrderId.capture(), any(), any());
+            verify(productClient).release(secondOrderId.getValue(), TOKEN);
         }
     }
 

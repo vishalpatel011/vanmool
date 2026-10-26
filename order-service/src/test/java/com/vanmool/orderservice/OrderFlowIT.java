@@ -74,7 +74,7 @@ class OrderFlowIT {
     @BeforeEach
     void cartWithTwoBaskets() {
         when(cartClient.getCartLines("eyJ.customer.token")).thenReturn(List.of(new CartClient.CartLine(BASKET_ID, 2)));
-        when(productClient.reserve(any(UUID.class), any())).thenAnswer(invocation -> new ProductClient.Reservation(
+        when(productClient.reserve(any(UUID.class), any(), any())).thenAnswer(invocation -> new ProductClient.Reservation(
                 invocation.getArgument(0),
                 List.of(new ProductClient.ReservedItem(BASKET_ID, "Handcrafted Bamboo Basket", new BigDecimal("499.99"), 2))));
     }
@@ -132,7 +132,7 @@ class OrderFlowIT {
         // by product-service from OrderCancelled, not by a call from here
         assertEquals(List.of("OrderPlaced", "OrderCancelled"), jdbcTemplate.queryForList(
                 "SELECT event_type FROM outbox_event WHERE message_key = ? ORDER BY created_at", String.class, orderId));
-        verify(productClient, times(0)).release(any());
+        verify(productClient, times(0)).release(any(), any());
     }
 
     @Test
@@ -147,7 +147,7 @@ class OrderFlowIT {
                 "SELECT COUNT(*) FROM outbox_event WHERE message_key = ?", Integer.class, first));
         assertEquals(1, jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM orders WHERE user_id = UUID_TO_BIN(?)", Integer.class, userId.toString()));
-        verify(productClient, times(1)).reserve(any(UUID.class), any());
+        verify(productClient, times(1)).reserve(any(UUID.class), any(), any());
     }
 
     @Test

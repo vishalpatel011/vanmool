@@ -93,10 +93,10 @@ public class OrderService {
         UUID orderId = UUID.randomUUID();
         ProductClient.Reservation reservation;
         try {
-            reservation = productClient.reserve(orderId, lines);
+            reservation = productClient.reserve(orderId, lines, bearerToken);
         } catch (ProductServiceUnavailableException e) {
             // A timeout does not say whether product-service took the units before it failed; releasing makes sure
-            releaseQuietly(orderId);
+            releaseQuietly(orderId, bearerToken);
             throw e;
         }
 
@@ -120,7 +120,7 @@ public class OrderService {
                 return inserted;
             });
         } catch (DataIntegrityViolationException e) {
-            releaseQuietly(orderId);
+            releaseQuietly(orderId, bearerToken);
             // Two requests with the same Idempotency-Key at the same moment: the unique key let only the first in
             if (idempotencyKey != null) {
                 Optional<Order> first = orderRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey);
@@ -130,7 +130,7 @@ public class OrderService {
             }
             throw e;
         } catch (RuntimeException e) {
-            releaseQuietly(orderId);
+            releaseQuietly(orderId, bearerToken);
             throw e;
         }
 
@@ -236,9 +236,9 @@ public class OrderService {
         return orderRepository.findByIdAndUserId(orderId, userId).orElseThrow(() -> new OrderNotFoundException(orderId));
     }
 
-    private void releaseQuietly(UUID orderId) {
+    private void releaseQuietly(UUID orderId, String bearerToken) {
         try {
-            productClient.release(orderId);
+            productClient.release(orderId, bearerToken);
         } catch (RuntimeException e) {
             // Both the order and the release failed. If product-service did reserve units for this order (after a
             // timeout it is unknown), they stay reserved until someone releases them

@@ -24,6 +24,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -66,7 +67,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // validation, GlobalExceptionHandler), not the services, repositories or the database. ProductService is replaced
 // by a Mockito mock, and MockMvc sends HTTP requests to the controller without starting a real server.
 // Expected JSON is written out by hand, so a change to the API's JSON shows up as a failing test.
+// The security rules are left out here (addFilters = false): this test is about the web layer itself, and
+// ProductSecurityWebMvcTest checks who may call what
 @WebMvcTest(ProductController.class)
+@AutoConfigureMockMvc(addFilters = false)
 class ProductControllerWebMvcTest {
     private static final UUID PRODUCT_ID = UUID.fromString("150dac81-6130-4903-9385-9b682db879b3");
     private static final String VALID_REQUEST = """

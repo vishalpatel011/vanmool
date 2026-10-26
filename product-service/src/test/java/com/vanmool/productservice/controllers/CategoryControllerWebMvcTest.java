@@ -4,6 +4,7 @@ import com.vanmool.productservice.projections.CategorySummary;
 import com.vanmool.productservice.services.CategoryService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -17,7 +18,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+// The security rules are left out here (addFilters = false): this test is about the web layer itself, and
+// ProductSecurityWebMvcTest checks who may call what
 @WebMvcTest(CategoryController.class)
+@AutoConfigureMockMvc(addFilters = false)
 class CategoryControllerWebMvcTest {
     @Autowired
     private MockMvc mockMvc;

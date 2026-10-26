@@ -43,13 +43,16 @@ public class ProductClient {
     record RemoteError(String error, String message) {
     }
 
-    public Reservation reserve(UUID orderId, List<CartClient.CartLine> lines) {
+    // With the customer's token: product-service only reserves for a signed-in user, and the API gateway does not
+    // expose these endpoints, so only the services reach them
+    public Reservation reserve(UUID orderId, List<CartClient.CartLine> lines, String bearerToken) {
         List<ReservationItem> items = lines.stream()
                 .map(line -> new ReservationItem(line.productId(), line.quantity()))
                 .toList();
         try {
             return productRestClient.post()
                     .uri("/stock-reservations")
+                    .headers(headers -> headers.setBearerAuth(bearerToken))
                     .body(new ReservationRequest(orderId, items))
                     .retrieve()
                     .body(Reservation.class);
@@ -71,10 +74,11 @@ public class ProductClient {
         }
     }
 
-    public void release(UUID orderId) {
+    public void release(UUID orderId, String bearerToken) {
         try {
             productRestClient.delete()
                     .uri("/stock-reservations/{orderId}", orderId)
+                    .headers(headers -> headers.setBearerAuth(bearerToken))
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientException e) {

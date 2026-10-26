@@ -95,6 +95,17 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        <!-- Product and stock changes need a seller's or an admin's JWT from user-auth-service; this service only checks
+             tokens (resource server), it never issues them -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- Service discovery (Day 223): registers with Eureka, and finds other services by name through Spring
              Cloud LoadBalancer -->
         <dependency>

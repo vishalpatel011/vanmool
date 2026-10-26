@@ -93,7 +93,9 @@ class RemoteClientsTest {
         @Test
         void reserve_sendsTheOrderIdAndItems_andReadsNamesAndPrices() {
             // Arrange
+            // The customer's token goes with it: product-service reserves only for a signed-in user
             server.expect(requestTo("http://product-service/stock-reservations")).andExpect(method(HttpMethod.POST))
+                    .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer eyJ.customer.token"))
                     .andExpect(content().json("""
                             { "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
                               "items": [ { "productId": "150dac81-6130-4903-9385-9b682db879b3", "quantity": 2 } ] }"""))
@@ -103,7 +105,7 @@ class RemoteClientsTest {
                                            "name": "Handcrafted Bamboo Basket", "unitPrice": 499.99, "quantity": 2 } ] }"""));
 
             // Act
-            ProductClient.Reservation reservation = productClient.reserve(ORDER_ID, lines);
+            ProductClient.Reservation reservation = productClient.reserve(ORDER_ID, lines, "eyJ.customer.token");
 
             // Assert
             assertEquals(List.of(new ProductClient.ReservedItem(BASKET_ID, "Handcrafted Bamboo Basket", new BigDecimal("499.99"), 2)),
@@ -120,7 +122,7 @@ class RemoteClientsTest {
 
             // Act & Assert
             InsufficientStockException exception = assertThrows(InsufficientStockException.class,
-                    () -> productClient.reserve(ORDER_ID, lines));
+                    () -> productClient.reserve(ORDER_ID, lines, "eyJ.customer.token"));
             assertEquals("Not enough stock for products [" + BASKET_ID + "]", exception.getMessage());
         }
 
@@ -133,7 +135,7 @@ class RemoteClientsTest {
 
             // Act & Assert
             ProductUnavailableException exception = assertThrows(ProductUnavailableException.class,
-                    () -> productClient.reserve(ORDER_ID, lines));
+                    () -> productClient.reserve(ORDER_ID, lines, "eyJ.customer.token"));
             assertEquals("Product with id " + BASKET_ID + " not found", exception.getMessage());
         }
 
@@ -146,8 +148,8 @@ class RemoteClientsTest {
             server.expect(requestTo("http://product-service/stock-reservations")).andRespond(withServerError());
 
             // Act & Assert
-            assertThrows(ProductServiceUnavailableException.class, () -> productClient.reserve(ORDER_ID, lines));
-            assertThrows(ProductServiceUnavailableException.class, () -> productClient.reserve(ORDER_ID, lines));
+            assertThrows(ProductServiceUnavailableException.class, () -> productClient.reserve(ORDER_ID, lines, "eyJ.customer.token"));
+            assertThrows(ProductServiceUnavailableException.class, () -> productClient.reserve(ORDER_ID, lines, "eyJ.customer.token"));
         }
 
         @Test
@@ -155,10 +157,11 @@ class RemoteClientsTest {
             // Arrange
             server.expect(requestTo("http://product-service/stock-reservations/" + ORDER_ID))
                     .andExpect(method(HttpMethod.DELETE))
+                    .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer eyJ.customer.token"))
                     .andRespond(withNoContent());
 
             // Act
-            productClient.release(ORDER_ID);
+            productClient.release(ORDER_ID, "eyJ.customer.token");
 
             // Assert
             server.verify();
@@ -170,7 +173,7 @@ class RemoteClientsTest {
             server.expect(requestTo("http://product-service/stock-reservations/" + ORDER_ID)).andRespond(withServerError());
 
             // Act & Assert
-            assertThrows(ProductServiceUnavailableException.class, () -> productClient.release(ORDER_ID));
+            assertThrows(ProductServiceUnavailableException.class, () -> productClient.release(ORDER_ID, "eyJ.customer.token"));
         }
     }
 }

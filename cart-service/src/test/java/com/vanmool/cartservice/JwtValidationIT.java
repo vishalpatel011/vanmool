@@ -72,8 +72,10 @@ class JwtValidationIT {
 
     @DynamicPropertySource
     static void tokenSettings(DynamicPropertyRegistry registry) {
-        registry.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
-                () -> "http://127.0.0.1:" + JWKS_SERVER.getAddress().getPort() + "/oauth2/jwks");
+        // The keys are asked for at http://user-auth-service/oauth2/jwks, as configured: the local server is the one
+        // instance of that service name (Eureka is off in tests)
+        registry.add("spring.cloud.discovery.client.simple.instances.user-auth-service[0].uri",
+                () -> "http://127.0.0.1:" + JWKS_SERVER.getAddress().getPort());
         registry.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", () -> ISSUER);
     }
 

@@ -200,7 +200,7 @@ Each service reads its settings from the environment of its own process, so the 
 | `REDIS_PASSWORD` | Redis password, if the server requires one | empty | not used | empty | not used |
 | `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used | not used | not used |
 | `AUTH_ISSUER` | Issuer of the tokens: user-auth-service's public URL | `http://localhost:8081` | `http://localhost:8081` | `http://localhost:8081` | `http://localhost:8081` |
-| `AUTH_JWKS_URI` | Where user-auth-service publishes its public keys | `http://user-auth-service/oauth2/jwks` (a service name, through Eureka) | not used | `http://localhost:8081/oauth2/jwks` | `http://localhost:8081/oauth2/jwks` |
+| `AUTH_JWKS_URI` | Where user-auth-service publishes its public keys: a service name, through Eureka | `http://user-auth-service/oauth2/jwks` | not used | `http://user-auth-service/oauth2/jwks` | `http://user-auth-service/oauth2/jwks` |
 | `PRODUCT_SERVICE_URL` | Base URL of product-service: a service name, resolved through Eureka | not used | not used | `http://product-service` | `http://product-service` |
 | `CART_TTL` | A cart untouched for this long is deleted (ISO-8601 duration) | not used | not used | `P30D` (30 days) | not used |
 | `CART_SERVICE_URL` | Base URL of cart-service: a service name, resolved through Eureka | not used | not used | not used | `http://cart-service` |
@@ -721,7 +721,7 @@ Errors use the same format as the other services. Codes: `ORDER_NOT_FOUND`, `PAY
 | `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | The payment database | `jdbc:mysql://localhost:3306/payment_db`, `PaymentService_user`, empty |
 | `ORDER_SERVICE_URL` | Base URL of order-service: a service name, resolved through Eureka | `http://order-service` |
 | `EUREKA_URL` | Where the service registers and reads the registry | `http://localhost:8761/eureka/` |
-| `AUTH_ISSUER`, `AUTH_JWKS_URI` | Token issuer and public keys, as in the cart service | `http://localhost:8081`, `.../oauth2/jwks` |
+| `AUTH_ISSUER`, `AUTH_JWKS_URI` | Token issuer and public keys, as in the cart service | `http://localhost:8081`, `http://user-auth-service/oauth2/jwks` |
 | `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | `localhost:9092` |
 | `PAYMENT_PUBLIC_BASE_URL` | Public address for gateway callbacks and webhooks | `http://localhost:8085` |
 | `PAYMENT_DEFAULT_GATEWAY` | Gateway used when the customer does not choose | `RAZORPAY` |

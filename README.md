@@ -378,6 +378,9 @@ The user-auth service (port 8081) owns user accounts. It never stores or returns
 | POST | `/auth/login` | 200, a bearer token and its expiry | 400 invalid request body, 401 email or password incorrect |
 | POST | `/auth/logout` | 204, the token stops working | 401 missing or malformed `Authorization` header |
 | GET | `/auth/validate` | 200, the token's user | 401 token missing, invalid, expired or revoked |
+| POST | `/auth/password-reset` | 202, a reset link is emailed if the address has an account | 400 not an email address |
+| GET | `/auth/password-reset/confirm?token=...` | 200, the page the emailed link opens: a form for the new password | |
+| POST | `/auth/password-reset/confirm` | 204, the password is reset and every session ends | 400 invalid new password, or link unknown, used or expired |
 | GET | `/users/me` | 200, the signed-in user | 401 token missing, invalid, expired or revoked |
 | PATCH | `/users/me` | 200, the profile with the fields sent changed | 400 invalid field, 401 |
 | PUT | `/users/me/password` | 204, the password is changed and the user's other sessions end | 400 invalid or unchanged new password, 401, 403 current password incorrect |
@@ -417,13 +420,20 @@ Passwords are checked by Spring Security (a `UserDetailsService` that reads `use
 
 **Changing the password.** `PUT /users/me/password` takes `{ "currentPassword": "...", "newPassword": "..." }`. The current password is asked for again although the request carries a valid token, so a token left on a shared or stolen device is not enough to take over the account; a wrong one gets `403 CURRENT_PASSWORD_INCORRECT` (not 401, which would sign the user out). The new password follows the signup rules and must differ from the current one. On success the new BCrypt hash is stored, every other session of the user is revoked (the device that made the change stays signed in), and a `PasswordChanged` event makes the notification service email the user, so a change they did not make does not go unnoticed. The other services check tokens locally with the public keys, so there an ended session works until its token expires.
 
+**Forgotten password.** `POST /auth/password-reset` takes `{ "email": "..." }` and always answers `202`, whether or not the address has an account, so it cannot be used to find out who is registered. For an account, it creates a link that works once, for 30 minutes (`auth.password-reset.validity`), and the notification service emails it. At most 3 links per account are sent per hour, so nobody can flood a mailbox.
+
+- **The token.** The link carries 32 random bytes from `SecureRandom` (Base64url, 43 characters). Only their SHA-256 hash is stored in `password_reset_token`, so a copy of the database gives nobody a usable link. A fast hash is enough here: the token is random, not something a person chose, so it cannot be guessed from its hash as a password could.
+- **The link.** It opens a small page served by this service (`GET /auth/password-reset/confirm?token=...`). Opening it changes nothing, because email scanners open links on their own. The page sends `{ "token": "...", "newPassword": "..." }` to `POST /auth/password-reset/confirm`, which a web or mobile client can also call itself. `PASSWORD_RESET_LINK` points the emails at such a client instead.
+- **Using it.** The link is used in one conditional `UPDATE` (two requests with the same link: one wins). In the same transaction the new BCrypt hash is stored, the account's other open links stop working, every session is revoked, and a `PasswordChanged` event sends the security notice. An unknown, used or expired link gets one answer for all three: `400 INVALID_RESET_LINK`.
+- **The token in transit.** The link, with its token, travels to the notification service in the `PasswordResetRequested` event, so it is also in this service's outbox table and on the `user-events` topic until the link expires. That is accepted because the link works once and only for 30 minutes.
+
 Roles: every new account is a `CUSTOMER`. An `ADMIN` can grant `SELLER` (for producers who list products) or `ADMIN` with `PUT /users/{id}/roles/{role}`. The first administrator is made directly in the database:
 
 ```sql
 INSERT INTO user_role (user_id, role) SELECT id, 'ADMIN' FROM users WHERE email = 'admin@example.com';
 ```
 
-Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `FORBIDDEN` and `CURRENT_PASSWORD_INCORRECT` (403), `USER_NOT_FOUND` (404), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
+Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `FORBIDDEN` and `CURRENT_PASSWORD_INCORRECT` (403), `USER_NOT_FOUND` (404), `INVALID_RESET_LINK` (400), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
 
 ### OAuth2 and OpenID Connect
 
@@ -445,6 +455,7 @@ Configuration:
 |---|---|---|
 | `JWT_PRIVATE_KEY` | RSA private key that signs all tokens, as a PKCS#8 PEM or its Base64 on one line (`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`). Every instance must use the same key | none: a key is generated at startup, for local development only (tokens stop working on restart) |
 | `AUTH_ISSUER` | The issuer written into tokens and published in the discovery document; the public URL in a deployment | `http://localhost:8081` |
+| `PASSWORD_RESET_LINK` | Start of the emailed password reset link; the token is appended | `${AUTH_ISSUER}/auth/password-reset/confirm?token=` (this service's own page) |
 | `WEB_CLIENT_REDIRECT_URIS` | Comma-separated redirect URIs of `vanmool-web` | `http://127.0.0.1:3000/callback,https://oauth.pstmn.io/v1/callback` |
 
 ## Cart Service API
@@ -657,6 +668,7 @@ Services tell each other what happened through Kafka, when the sender does not n
 |---|---|---|---|---|
 | `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
 | `user-events` | user-auth-service | `PasswordChanged`: `userId`, `name`, `email` (never a password or hash) | user id | notification-service (security notice) |
+| `user-events` | user-auth-service | `PasswordResetRequested`: `userId`, `name`, `email`, `resetLink` (holds the one-time token), `expiresAt` | user id | notification-service (reset email) |
 | `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation) |
 | `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount`, `reason` (`CUSTOMER` or `PAYMENT_TIMEOUT`) | order id | product-service (puts the stock back), payment-service (closes the open payment link), notification-service |
 | `order-events` | order-service | `OrderShipped`: `orderId`, `userId`, `customerEmail`, `carrier`, `trackingNumber` (may be null) | order id | notification-service |
@@ -692,6 +704,7 @@ The notification service has no API. It reads `user-events`, `order-events` and 
 |---|---|
 | `UserRegistered` | "Welcome to Vanmool", to the new account's address |
 | `PasswordChanged` | "Your Vanmool password was changed": when (IST), that other devices were signed out, and what to do if it was not them |
+| `PasswordResetRequested` | "Reset your Vanmool password": the link, until when it works (IST), and that nothing changes if the email is ignored |
 | `OrderPlaced` | "Your Vanmool order 7c9e6679 is placed": each product with its quantity and line total, the total in rupees (₹1,359.98), and the delivery address |
 | `OrderCancelled` | "Your Vanmool order 7c9e6679 is cancelled", saying so when the payment did not arrive in time |
 | `OrderShipped` | "Your Vanmool order 7c9e6679 is on its way": the carrier and the tracking number |
@@ -746,6 +759,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] MockMvc web layer tests with JSON assertions
 - [x] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2 / OpenID Connect
 - [x] Profile management: change the name, change the password (other sessions end, security email)
+- [x] Password reset through a one-time emailed link (only its hash stored, 30 minutes, at most 3 an hour)
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
 - [x] Redis: product cache
 - [x] Redis: cart storage

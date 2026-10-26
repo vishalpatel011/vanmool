@@ -51,9 +51,27 @@ public class EmailComposer {
 
                 The password of your Vanmool account was changed %s. Your other devices have been signed out.
 
-                If you did not change it, someone else may know your password: please contact us straight away.
+                If you did not change it, someone else may know your password: ask for a password reset link
+                straight away.
                 """.formatted(event.name(), changedAt) + SIGNATURE;
         return new Email(event.email(), "Your Vanmool password was changed", body);
+    }
+
+    // Password reset (PRD 1.4): the link, how long it works, and that nothing changes if it is ignored
+    public Email passwordReset(Events.PasswordResetRequested event) {
+        String until = RECEIPT_TIME.format(event.expiresAt().atZone(ZoneId.of("Asia/Kolkata")));
+        String body = """
+                Hello %s,
+
+                We received a request to reset the password of your Vanmool account. To choose a new password, open
+                this link:
+
+                %s
+
+                The link works once, until %s.
+                If you did not ask for it, you can ignore this email: your password stays as it is.
+                """.formatted(event.name(), event.resetLink(), until) + SIGNATURE;
+        return new Email(event.email(), "Reset your Vanmool password", body);
     }
 
     public Email orderConfirmation(Events.OrderPlaced event) {

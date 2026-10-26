@@ -48,6 +48,11 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", e.getMessage(), request);
     }
 
+    @ExceptionHandler(InvalidResetLinkException.class)
+    public ResponseEntity<ErrorDto> handleInvalidResetLink(InvalidResetLinkException e, HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_REQUEST, "INVALID_RESET_LINK", e.getMessage(), request);
+    }
+
     @ExceptionHandler(UserNotFoundException.class)
     public ResponseEntity<ErrorDto> handleUserNotFound(UserNotFoundException e, HttpServletRequest request) {
         return buildError(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", e.getMessage(), request);

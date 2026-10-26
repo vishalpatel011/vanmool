@@ -57,6 +57,20 @@ class EmailComposerTest {
     }
 
     @Test
+    void passwordReset_holdsTheLink_andSaysUntilWhenItWorks_inIst() {
+        // 10:30 UTC is 4:00 PM in India
+        Email email = composer.passwordReset(new Events.PasswordResetRequested(UUID.randomUUID(), "Asha Gamit",
+                "asha@example.com", "http://localhost:8081/auth/password-reset/confirm?token=abc123",
+                java.time.Instant.parse("2026-10-26T10:30:00Z")));
+
+        assertEquals("asha@example.com", email.to());
+        assertEquals("Reset your Vanmool password", email.subject());
+        assertTrue(email.body().contains("\n\nhttp://localhost:8081/auth/password-reset/confirm?token=abc123\n\n"), email.body());
+        assertTrue(email.body().contains("The link works once, until 26 Oct 2026, 4:00 PM IST."), email.body());
+        assertTrue(email.body().contains("you can ignore this email: your password stays as it is"), email.body());
+    }
+
+    @Test
     void orderConfirmation_listsEachProductWithItsLineTotal_theTotal_andTheAddress() {
         // Act
         Email email = composer.orderConfirmation(new Events.OrderPlaced(UUID.randomUUID(), ORDER_ID, "asha@example.com",

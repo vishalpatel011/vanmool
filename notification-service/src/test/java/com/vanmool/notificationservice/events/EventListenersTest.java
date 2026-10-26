@@ -19,7 +19,9 @@ import org.springframework.mail.MailSendException;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -87,6 +89,29 @@ class EventListenersTest {
         // Assert
         assertEquals("Your Vanmool password was changed", sentEmail().subject());
         verify(handledEvents).add(EVENT_ID);
+    }
+
+    @Test
+    void passwordResetRequested_sendsTheLink() throws Exception {
+        listeners.onUserEvent("""
+                { "eventId": "0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10", "eventType": "PasswordResetRequested",
+                  "occurredAt": "2026-10-26T10:00:00Z", "userId": "a8c1e6ff-556d-4dd2-a238-148b3fca351c",
+                  "name": "Asha Gamit", "email": "asha@example.com",
+                  "resetLink": "http://localhost:8081/auth/password-reset/confirm?token=abc123",
+                  "expiresAt": "2026-10-26T10:30:00Z" }""");
+
+        Email email = sentEmail();
+        assertEquals("Reset your Vanmool password", email.subject());
+        assertTrue(email.body().contains("?token=abc123"), email.body());
+    }
+
+    @Test
+    void passwordResetWithoutItsLink_isRefused_withoutCopyingTheMessageIntoTheError() {
+        MalformedEventException exception = assertThrows(MalformedEventException.class, () -> listeners.onUserEvent(
+                "{ \"eventId\": \"0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10\", \"eventType\": \"PasswordResetRequested\", "
+                        + "\"email\": \"asha@example.com\" }"));
+        assertFalse(exception.getMessage().contains("asha@example.com"), exception.getMessage());
+        verifyNoInteractions(emailSender);
     }
 
     @Test

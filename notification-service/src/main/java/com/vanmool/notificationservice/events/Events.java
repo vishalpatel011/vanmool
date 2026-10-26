@@ -23,6 +23,11 @@ public final class Events {
     public record PasswordChanged(UUID eventId, Instant occurredAt, UUID userId, String name, String email) {
     }
 
+    // resetLink holds a one-time token: it goes into the email and nowhere else (never into a log)
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PasswordResetRequested(UUID eventId, String name, String email, String resetLink, Instant expiresAt) {
+    }
+
     // order-events, from order-service
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record OrderPlaced(UUID eventId, UUID orderId, String customerEmail, List<Item> items, BigDecimal totalAmount,

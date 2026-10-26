@@ -34,6 +34,15 @@ public class EventListeners {
                 Events.PasswordChanged changed = read(event, Events.PasswordChanged.class);
                 notifier.sendOnce(changed.eventId(), emailComposer.passwordChanged(changed));
             }
+            case "PasswordResetRequested" -> {
+                Events.PasswordResetRequested reset = read(event, Events.PasswordResetRequested.class);
+                if (reset.resetLink() == null || reset.expiresAt() == null) {
+                    // Not echoed: the message holds the user's email and, if present, a usable token
+                    throw new MalformedEventException("PasswordResetRequested event " + reset.eventId()
+                            + " without its link or expiry");
+                }
+                notifier.sendOnce(reset.eventId(), emailComposer.passwordReset(reset));
+            }
             default -> {
                 // not an event that needs an email
             }

@@ -65,7 +65,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | `order-service` | Checkout from the cart, order history, the order lifecycle and cancellation | MySQL (`order_db`) | In progress |
 | `payment-service` | Payment links (Razorpay, Stripe), webhooks, callbacks, reconciliation | MySQL (`payment_db`) | In progress |
 | `notification-service` | Emails for events on Kafka: welcome, order placed, order cancelled | Redis (handled event ids) | In progress |
-| `api-gateway` | Single entry point and request routing | | Planned |
+| `api-gateway` | Single entry point: routes each request to the service that owns it, request ids, access log | | In progress |
 | `service-discovery` | Eureka service registry: every service registers here and finds the others by name | | In progress |
 
 ## Tech stack
@@ -113,6 +113,7 @@ vanmool/
 ├── notification-service/  emails from Kafka events (events/ listeners, emails/ composing and sending; no HTTP API)
 ├── payment-service/    payments (gateways/ holds Razorpay, Stripe and the fake gateway behind one interface)
 ├── service-discovery/  Eureka service registry (a Spring Boot application with @EnableEurekaServer)
+├── api-gateway/        Spring Cloud Gateway: routes, request ids (filters/), the gateway's error format (errors/)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
@@ -224,10 +225,10 @@ To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user
 
 Start the service registry first, then the services:
 
-- **IntelliJ IDEA:** open the `vanmool` folder and run `ServiceDiscoveryApplication`, then `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`, `NotificationServiceApplication` or `PaymentServiceApplication`.
-- **Command line:** `./mvnw -pl service-discovery spring-boot:run`, then `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`, `payment-service`)
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ServiceDiscoveryApplication`, then `ApiGatewayApplication`, `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`, `NotificationServiceApplication` or `PaymentServiceApplication`.
+- **Command line:** `./mvnw -pl service-discovery spring-boot:run`, then `./mvnw -pl api-gateway spring-boot:run` and `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`, `payment-service`)
 
-The registry listens on `http://localhost:8761`, which is also its dashboard of registered instances. The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082`, the order service on `http://localhost:8083` and the payment service on `http://localhost:8085`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+The registry listens on `http://localhost:8761`, which is also its dashboard of registered instances. Clients use the API gateway at `http://localhost:8000`; each service can also still be called at its own port. The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082`, the order service on `http://localhost:8083` and the payment service on `http://localhost:8085`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
 
 ## Service discovery (Eureka)
 
@@ -246,6 +247,29 @@ Services do not know each other's addresses. Each one registers with the registr
   | Redis stops, so cart-service's health is DOWN | `DOWN` in the registry 5 s later; checkout answers 503 at once (10 to 60 ms) instead of waiting for Redis |
   | Redis is back | `UP` 32 s later; checkout works again after 35 s |
 - **Without the registry**, the services still start and keep their last copy of the registry. Locally, Eureka's self-preservation is off (`EUREKA_SELF_PRESERVATION`): with only a few instances it would mostly keep instances that were simply stopped.
+
+## API gateway
+
+Clients use one address, `http://localhost:8000` (Spring Cloud Gateway on WebFlux). The gateway sends each request, unchanged, to the service that owns its path and to one of that service's instances (`lb://`, from the registry, round robin). It holds no business logic.
+
+| Path | Service |
+|---|---|
+| `/auth/**`, `/users/**` | user-auth-service |
+| `/products/**`, `/categories/**` | product-service |
+| `/cart/**` | cart-service |
+| `/orders/**`, `/admin/orders/**` | order-service |
+| `/payments/**` (including webhooks and callbacks), `/fake-gateway/**` | payment-service |
+
+- **Only the public API is routed.** Internal endpoints, such as the stock reservations that the order service makes with the product service (`/stock-reservations`), answer 404 from outside. The OAuth2 / OpenID Connect endpoints and the sign-in page of the user-auth service are used at its own address, which is also the issuer written into tokens.
+- **Request ids.** Every request gets an `X-Request-Id`: the client's own if it sent a plain one (letters, digits, hyphens, at most 64), otherwise a new UUID. The service receives it, and the client gets it back in the response, also on errors. The gateway logs one line per request, for example `GET /cart -> cart-service 200 in 23 ms [5c3e...]`. The path is logged without its query, because a query can hold a secret such as a password reset token.
+- **Errors in the services' format.** When the gateway answers itself, the body has the same fields as the services' errors (`timestamp`, `status`, `error`, `message`, `path`):
+  - `404 NOT_FOUND`: no API at this path.
+  - `503 SERVICE_UNAVAILABLE`: the service has no instance up, or the instance cannot be reached.
+  - `504 GATEWAY_TIMEOUT`: no answer within 10 seconds.
+
+  The messages carry no host names or exception texts.
+- **Retries.** A `GET` whose instance cannot be reached is tried once more on the next instance, as the services do among themselves. A service's own error answer is passed on as it is.
+- **Time limits.** 1 second to connect to a service, 10 seconds for its answer (starting a payment calls a payment gateway).
 
 ## Product Service API
 
@@ -810,7 +834,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Stock and stock reservations (inside the product service)
 - [x] Notification service: welcome, order, payment, cancellation, shipping and delivery emails from Kafka events, each sent once
 - [x] Spring Cloud: Eureka service discovery; services call each other by name with client-side load balancing
-- [ ] Spring Cloud: API Gateway
+- [x] Spring Cloud: API Gateway with routes by path, request ids and an access log; internal endpoints not exposed
 - [ ] Docker and Docker Compose
 
 ## Future scope

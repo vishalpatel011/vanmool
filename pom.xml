@@ -20,5 +20,6 @@
         <module>notification-service</module>
         <module>payment-service</module>
         <module>service-discovery</module>
+        <module>api-gateway</module>
     </modules>
 </project>

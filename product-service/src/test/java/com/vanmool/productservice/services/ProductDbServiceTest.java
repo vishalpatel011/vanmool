@@ -3,12 +3,17 @@ package com.vanmool.productservice.services;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
+import com.vanmool.productservice.dtos.ProductImageDto;
 import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
+import com.vanmool.productservice.dtos.ProductSpecificationDto;
+import com.vanmool.productservice.exceptions.InvalidRequestException;
 import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
 import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.models.ProductImage;
+import com.vanmool.productservice.models.ProductSpecification;
 import com.vanmool.productservice.repositories.ProductRepository;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -82,7 +87,12 @@ class ProductDbServiceTest {
         product.setName("Handcrafted Bamboo Basket");
         product.setDescription("Woven by hand from local bamboo in Dangs, Gujarat");
         product.setPrice(new BigDecimal("499.99"));
-        product.setImageUrl("https://example.com/images/bamboo-basket.jpg");
+        product.setImages(List.of(
+                new ProductImage("https://example.com/images/bamboo-basket.jpg", "Handcrafted Bamboo Basket"),
+                new ProductImage("https://example.com/images/bamboo-basket-weave.jpg", "The weave up close")));
+        product.setSpecifications(List.of(
+                new ProductSpecification("Dimensions", "30 x 20 x 15 cm"),
+                new ProductSpecification("Weight", "400 g")));
         product.setCategory(category("Traditional Crafts"));
         product.setOriginRegion("Dangs, Gujarat");
         product.setMaterials("Bamboo");
@@ -96,7 +106,7 @@ class ProductDbServiceTest {
         request.setName(name);
         request.setDescription(description);
         request.setPrice(new BigDecimal(price));
-        request.setImageUrl(imageUrl);
+        request.setImages(imageUrl == null ? null : List.of(new ProductImageDto(imageUrl, null)));
         request.setCategory(category);
         return request;
     }
@@ -123,7 +133,14 @@ class ProductDbServiceTest {
                 () -> assertEquals(PRODUCT_ID, response.getId()),
                 () -> assertEquals("Handcrafted Bamboo Basket", response.getName()),
                 () -> assertEquals("Woven by hand from local bamboo in Dangs, Gujarat", response.getDescription()),
+                // The main image is the first of the images
                 () -> assertEquals("https://example.com/images/bamboo-basket.jpg", response.getImageUrl()),
+                () -> assertEquals(List.of(
+                        new ProductImageDto("https://example.com/images/bamboo-basket.jpg", "Handcrafted Bamboo Basket"),
+                        new ProductImageDto("https://example.com/images/bamboo-basket-weave.jpg", "The weave up close")),
+                        response.getImages()),
+                () -> assertEquals(List.of(new ProductSpecificationDto("Dimensions", "30 x 20 x 15 cm"),
+                        new ProductSpecificationDto("Weight", "400 g")), response.getSpecifications()),
                 () -> assertEquals(new BigDecimal("499.99"), response.getPrice()),
                 () -> assertEquals("Traditional Crafts", response.getCategory()),
                 () -> assertEquals("Dangs, Gujarat", response.getOriginRegion()),
@@ -238,7 +255,8 @@ class ProductDbServiceTest {
                 () -> assertEquals("Ragi Biscuits", result.getName()),
                 () -> assertEquals("Baked with finger millet from Gujarat", result.getDescription()),
                 () -> assertEquals(new BigDecimal("120.00"), result.getPrice()),
-                () -> assertEquals("https://example.com/images/ragi-biscuits.jpg", result.getImageUrl()),
+                () -> assertEquals(List.of(new ProductImage("https://example.com/images/ragi-biscuits.jpg", null)), result.getImages()),
+                () -> assertEquals(List.of(), result.getSpecifications()),
                 () -> assertSame(naturalFoods, result.getCategory()),
                 () -> assertEquals("Gujarat", result.getOriginRegion()),
                 () -> assertEquals("Finger millet flour, jaggery", result.getMaterials()),
@@ -258,6 +276,43 @@ class ProductDbServiceTest {
 
         // Assert
         assertNull(result.getCategory());
+        assertEquals(List.of(), result.getImages());
+        assertNull(result.mainImageUrl());
+    }
+
+    @Test
+    void createProduct_keepsImagesAndSpecificationsInTheirOrder_trimmed() {
+        // Arrange
+        when(categoryService.findOrCreateCategory(null)).thenReturn(null);
+        saveReturnsItsArgument();
+        ProductRequestDto top = request("Wooden Spinning Top", null, "180", null, null);
+        top.setImages(List.of(new ProductImageDto(" https://example.com/images/top.jpg ", "  "),
+                new ProductImageDto("https://example.com/images/top-spinning.jpg", "The top spinning on a floor")));
+        top.setSpecifications(List.of(new ProductSpecificationDto(" Wood ", " Teak "),
+                new ProductSpecificationDto("Suitable for", "Children over 3 years")));
+
+        // Act
+        Product result = productDbService.createProduct(top);
+
+        // Assert: a blank description of an image is stored as none
+        assertEquals(List.of(new ProductImage("https://example.com/images/top.jpg", null),
+                new ProductImage("https://example.com/images/top-spinning.jpg", "The top spinning on a floor")), result.getImages());
+        assertEquals("https://example.com/images/top.jpg", result.mainImageUrl());
+        assertEquals(List.of(new ProductSpecification("Wood", "Teak"),
+                new ProductSpecification("Suitable for", "Children over 3 years")), result.getSpecifications());
+    }
+
+    @Test
+    void createProduct_withTheSameSpecificationTwice_inAnyLetterCase_isRefused_andNothingIsSaved() {
+        ProductRequestDto biscuits = request("Ragi Biscuits", null, "120", null, null);
+        biscuits.setSpecifications(List.of(new ProductSpecificationDto("Weight", "200 g"),
+                new ProductSpecificationDto("weight ", "250 g")));
+
+        InvalidRequestException exception = assertThrows(InvalidRequestException.class,
+                () -> productDbService.createProduct(biscuits));
+
+        assertEquals("specifications: \"weight\" appears more than once", exception.getMessage());
+        verify(productRepository, never()).save(any());
     }
 
     @Test
@@ -279,7 +334,9 @@ class ProductDbServiceTest {
                 () -> assertEquals("Warli Painted Basket", result.getName()),
                 () -> assertNull(result.getDescription()),
                 () -> assertEquals(new BigDecimal("650.00"), result.getPrice()),
-                () -> assertNull(result.getImageUrl()),
+                // and lists left out become empty: the basket's two images and two specifications are gone
+                () -> assertEquals(List.of(), result.getImages()),
+                () -> assertEquals(List.of(), result.getSpecifications()),
                 () -> assertSame(tribalArt, result.getCategory()),
                 () -> assertNull(result.getOriginRegion()),
                 () -> assertNull(result.getMaterials()),
@@ -318,11 +375,64 @@ class ProductDbServiceTest {
                 () -> assertEquals(0, new BigDecimal("450").compareTo(result.getPrice())),
                 () -> assertEquals("Handcrafted Bamboo Basket", result.getName()),
                 () -> assertEquals("Woven by hand from local bamboo in Dangs, Gujarat", result.getDescription()),
-                () -> assertEquals("https://example.com/images/bamboo-basket.jpg", result.getImageUrl()),
+                () -> assertEquals(2, result.getImages().size()),
+                () -> assertEquals("https://example.com/images/bamboo-basket.jpg", result.mainImageUrl()),
+                () -> assertEquals(List.of(new ProductSpecification("Dimensions", "30 x 20 x 15 cm"),
+                        new ProductSpecification("Weight", "400 g")), result.getSpecifications()),
                 () -> assertSame(traditionalCrafts, result.getCategory()),
                 () -> assertEquals("Dangs, Gujarat", result.getOriginRegion()),
                 () -> assertEquals("Bamboo", result.getMaterials())
         );
+    }
+
+    @Test
+    void patchProduct_canAddAnImageAndASpecification_atTheEndOfTheirLists() throws Exception {
+        // Arrange
+        Product basket = bambooBasket();
+        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(basket));
+        when(categoryService.findOrCreateCategory("Traditional Crafts")).thenReturn(basket.getCategory());
+        saveReturnsItsArgument();
+
+        // Act: "-" is JSON Patch for "after the last element"
+        Product result = productDbService.patchProduct(PRODUCT_ID, patch("""
+                [{"op": "add", "path": "/images/-", "value": {"url": "https://example.com/images/basket-in-use.jpg", "altText": "Fruit in the basket"}},
+                 {"op": "add", "path": "/specifications/-", "value": {"name": "Care", "value": "Wipe with a dry cloth"}}]"""));
+
+        // Assert
+        assertEquals(3, result.getImages().size());
+        assertEquals(new ProductImage("https://example.com/images/basket-in-use.jpg", "Fruit in the basket"), result.getImages().get(2));
+        assertEquals(new ProductSpecification("Care", "Wipe with a dry cloth"), result.getSpecifications().get(2));
+        assertEquals("https://example.com/images/bamboo-basket.jpg", result.mainImageUrl());
+    }
+
+    @Test
+    void patchProduct_cannotSetTheMainImageDirectly_itIsAlwaysTheFirstImage() throws Exception {
+        // Arrange
+        Product basket = bambooBasket();
+        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(basket));
+        when(categoryService.findOrCreateCategory("Traditional Crafts")).thenReturn(basket.getCategory());
+        saveReturnsItsArgument();
+
+        // Act
+        Product result = productDbService.patchProduct(PRODUCT_ID,
+                patch("[{\"op\": \"replace\", \"path\": \"/imageUrl\", \"value\": \"https://example.com/other.jpg\"}]"));
+
+        // Assert
+        assertEquals("https://example.com/images/bamboo-basket.jpg", result.mainImageUrl());
+        assertEquals(2, result.getImages().size());
+    }
+
+    @Test
+    void patchProduct_withAnImageAddressThatIsNotHttp_throwsNamingTheElement() throws Exception {
+        when(productRepository.findByIdAndDeletedFalse(PRODUCT_ID)).thenReturn(Optional.of(bambooBasket()));
+        JsonPatch scriptUrl = patch("[{\"op\": \"replace\", \"path\": \"/images/1/url\", \"value\": \"javascript:alert(1)\"}]");
+
+        ConstraintViolationException exception = assertThrows(ConstraintViolationException.class,
+                () -> productDbService.patchProduct(PRODUCT_ID, scriptUrl));
+
+        assertEquals("images[1].url", exception.getConstraintViolations().stream()
+                .map(ConstraintViolation::getPropertyPath).map(Object::toString).findFirst().orElseThrow());
+        verify(productRepository, never()).save(any());
     }
 
     @Test

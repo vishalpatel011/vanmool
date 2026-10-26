@@ -1,8 +1,10 @@
 package com.vanmool.productservice;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vanmool.productservice.dtos.ProductImageDto;
 import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
+import com.vanmool.productservice.dtos.ProductSpecificationDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.services.ProductService;
 import org.junit.jupiter.api.AfterEach;
@@ -15,6 +17,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -86,6 +89,49 @@ class ProductCacheIT {
         assertEquals("Dangs, Gujarat", cached.getOriginRegion());
         Long secondsLeft = redis.getExpire(key, TimeUnit.SECONDS);
         assertTrue(secondsLeft > 0 && secondsLeft <= 600, "TTL was " + secondsLeft);
+    }
+
+    @Test
+    void imagesAndSpecifications_keepTheirOrder_inMySqlsJsonColumns_andInTheCache() throws Exception {
+        // Arrange: a product with three images and two specifications
+        ProductRequestDto withDetails = request("Bamboo Basket", "450.00");
+        List<ProductImageDto> images = List.of(
+                new ProductImageDto("https://example.com/images/basket.jpg", "The basket"),
+                new ProductImageDto("https://example.com/images/basket-weave.jpg", "The weave up close"),
+                new ProductImageDto("https://example.com/images/basket-in-use.jpg", null));
+        List<ProductSpecificationDto> specifications = List.of(
+                new ProductSpecificationDto("Dimensions", "30 x 20 x 15 cm"), new ProductSpecificationDto("Weight", "400 g"));
+        withDetails.setImages(images);
+        withDetails.setSpecifications(specifications);
+        productService.replaceProduct(productId, withDetails);
+
+        // Act: the first read comes from MySQL and fills the cache, the second comes from Redis
+        ProductResponseDto fromMySql = productService.getProductById(productId);
+        ProductResponseDto fromRedis = productService.getProductById(productId);
+
+        // Assert: MySQL holds them as JSON arrays in the product row, in order
+        String imagesColumn = jdbcTemplate.queryForObject(
+                "SELECT JSON_EXTRACT(images, '$[1].url') FROM product WHERE id = UUID_TO_BIN(?)", String.class, productId.toString());
+        assertEquals("\"https://example.com/images/basket-weave.jpg\"", imagesColumn);
+        assertEquals(2, jdbcTemplate.queryForObject(
+                "SELECT JSON_LENGTH(specifications) FROM product WHERE id = UUID_TO_BIN(?)", Integer.class, productId.toString()));
+        // and both reads give the same lists, the first image being the main one
+        assertEquals(images, fromMySql.getImages());
+        assertEquals(specifications, fromMySql.getSpecifications());
+        assertEquals(images, fromRedis.getImages());
+        assertEquals(specifications, fromRedis.getSpecifications());
+        assertEquals("https://example.com/images/basket.jpg", fromRedis.getImageUrl());
+        assertTrue(redis.opsForValue().get(key).contains("\"altText\":\"The weave up close\""));
+    }
+
+    @Test
+    void aProductWithoutImages_hasEmptyLists_notNull() throws ProductNotFoundException {
+        // The product of @BeforeEach was created without images or specifications; the columns default to []
+        ProductResponseDto product = productService.getProductById(productId);
+
+        assertEquals(List.of(), product.getImages());
+        assertEquals(List.of(), product.getSpecifications());
+        assertEquals(null, product.getImageUrl());
     }
 
     @Test

@@ -3,6 +3,10 @@ package com.vanmool.productservice.controllers;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.github.fge.jsonpatch.JsonPatchException;
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.dtos.ProductImageDto;
+import com.vanmool.productservice.dtos.ProductSpecificationDto;
+import com.vanmool.productservice.models.ProductImage;
+import com.vanmool.productservice.models.ProductSpecification;
 import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
@@ -70,7 +74,14 @@ class ProductControllerWebMvcTest {
               "name": "Handcrafted Bamboo Basket",
               "price": 499.99,
               "description": "Woven by hand from local bamboo in Dangs, Gujarat",
-              "imageUrl": "https://example.com/images/bamboo-basket.jpg",
+              "images": [
+                { "url": "https://example.com/images/bamboo-basket.jpg", "altText": "Handcrafted Bamboo Basket" },
+                { "url": "https://example.com/images/bamboo-basket-weave.jpg", "altText": "The weave up close" }
+              ],
+              "specifications": [
+                { "name": "Dimensions", "value": "30 x 20 x 15 cm" },
+                { "name": "Weight", "value": "400 g" }
+              ],
               "category": "Traditional Crafts",
               "originRegion": "Dangs, Gujarat",
               "materials": "Bamboo",
@@ -99,7 +110,11 @@ class ProductControllerWebMvcTest {
     private static Product bambooBasket() {
         Product basket = product(PRODUCT_ID, "Handcrafted Bamboo Basket", "499.99", "Traditional Crafts");
         basket.setDescription("Woven by hand from local bamboo in Dangs, Gujarat");
-        basket.setImageUrl("https://example.com/images/bamboo-basket.jpg");
+        basket.setImages(List.of(
+                new ProductImage("https://example.com/images/bamboo-basket.jpg", "Handcrafted Bamboo Basket"),
+                new ProductImage("https://example.com/images/bamboo-basket-weave.jpg", "The weave up close")));
+        basket.setSpecifications(List.of(new ProductSpecification("Dimensions", "30 x 20 x 15 cm"),
+                new ProductSpecification("Weight", "400 g")));
         basket.setOriginRegion("Dangs, Gujarat");
         basket.setMaterials("Bamboo");
         basket.setStory("Woven by Warli and Kokna artisans in the Dangs forests, using skills passed down in their families");
@@ -229,6 +244,14 @@ class ProductControllerWebMvcTest {
                               "price": 499.99,
                               "description": "Woven by hand from local bamboo in Dangs, Gujarat",
                               "imageUrl": "https://example.com/images/bamboo-basket.jpg",
+                              "images": [
+                                { "url": "https://example.com/images/bamboo-basket.jpg", "altText": "Handcrafted Bamboo Basket" },
+                                { "url": "https://example.com/images/bamboo-basket-weave.jpg", "altText": "The weave up close" }
+                              ],
+                              "specifications": [
+                                { "name": "Dimensions", "value": "30 x 20 x 15 cm" },
+                                { "name": "Weight", "value": "400 g" }
+                              ],
                               "category": "Traditional Crafts",
                               "originRegion": "Dangs, Gujarat",
                               "materials": "Bamboo",
@@ -285,11 +308,41 @@ class ProductControllerWebMvcTest {
             verify(productService).createProduct(received.capture());
             assertEquals("Handcrafted Bamboo Basket", received.getValue().getName());
             assertEquals(new BigDecimal("499.99"), received.getValue().getPrice());
-            assertEquals("https://example.com/images/bamboo-basket.jpg", received.getValue().getImageUrl());
+            assertEquals(List.of(
+                    new ProductImageDto("https://example.com/images/bamboo-basket.jpg", "Handcrafted Bamboo Basket"),
+                    new ProductImageDto("https://example.com/images/bamboo-basket-weave.jpg", "The weave up close")),
+                    received.getValue().getImages());
+            assertEquals(new ProductSpecificationDto("Weight", "400 g"), received.getValue().getSpecifications().get(1));
             assertEquals("Traditional Crafts", received.getValue().getCategory());
             assertEquals("Dangs, Gujarat", received.getValue().getOriginRegion());
             assertEquals("Bamboo", received.getValue().getMaterials());
             assertEquals("Woven by Warli and Kokna artisans in the Dangs forests, using skills passed down in their families", received.getValue().getStory());
+        }
+
+        @Test
+        void invalidImagesAndSpecifications_return400NamingTheElement() throws Exception {
+            // Act & Assert: a script address instead of an image, and a specification without a value
+            mockMvc.perform(post("/products").contentType(MediaType.APPLICATION_JSON).content("""
+                            { "name": "Basket", "price": 499.99,
+                              "images": [ { "url": "https://example.com/a.jpg" }, { "url": "javascript:alert(1)" } ],
+                              "specifications": [ { "name": "Weight", "value": " " } ] }"""))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.allOf(
+                            org.hamcrest.Matchers.containsString("images[1].url"),
+                            org.hamcrest.Matchers.containsString("specifications[0].value"))));
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        void moreThanTenImages_returns400() throws Exception {
+            String images = String.join(",", java.util.Collections.nCopies(11, "{ \"url\": \"https://example.com/a.jpg\" }"));
+
+            mockMvc.perform(post("/products").contentType(MediaType.APPLICATION_JSON)
+                            .content("{ \"name\": \"Basket\", \"price\": 499.99, \"images\": [" + images + "] }"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("images: ")));
+            verifyNoInteractions(productService);
         }
 
         @Test

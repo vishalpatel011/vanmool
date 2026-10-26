@@ -3,6 +3,7 @@ package com.vanmool.productservice.controllers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.fge.jsonpatch.JsonPatch;
 import com.vanmool.productservice.dtos.ProductRequestDto;
+import com.vanmool.productservice.dtos.ProductImageDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
@@ -128,7 +129,7 @@ class ProductControllerTest {
         request.setName("Ragi Biscuits");
         request.setPrice(new BigDecimal("120.00"));
         request.setDescription("Baked with finger millet from Gujarat");
-        request.setImageUrl("https://example.com/images/ragi-biscuits.jpg");
+        request.setImages(List.of(new ProductImageDto("https://example.com/images/ragi-biscuits.jpg", "A packet of ragi biscuits")));
         request.setCategory("Natural Foods");
         Product created = product("Ragi Biscuits", "Natural Foods");
         when(productService.createProduct(request)).thenReturn(created);
@@ -150,7 +151,7 @@ class ProductControllerTest {
         request.setName("Warli Painted Basket");
         request.setPrice(new BigDecimal("650.00"));
         request.setDescription("Painted with Warli motifs");
-        request.setImageUrl("https://example.com/images/warli-basket.jpg");
+        request.setImages(List.of(new ProductImageDto("https://example.com/images/warli-basket.jpg", null)));
         request.setCategory("Tribal Art");
         Product replaced = product("Warli Painted Basket", "Tribal Art");
         replaced.setId(PRODUCT_ID);

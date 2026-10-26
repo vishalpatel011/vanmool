@@ -1,12 +1,17 @@
 package com.vanmool.productservice.services;
 
 import com.vanmool.productservice.configs.CacheConfig;
+import com.vanmool.productservice.dtos.ProductImageDto;
 import com.vanmool.productservice.dtos.ProductRequestDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
+import com.vanmool.productservice.dtos.ProductSpecificationDto;
+import com.vanmool.productservice.exceptions.InvalidRequestException;
 import com.vanmool.productservice.exceptions.InvalidSortException;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.models.Category;
 import com.vanmool.productservice.models.Product;
+import com.vanmool.productservice.models.ProductImage;
+import com.vanmool.productservice.models.ProductSpecification;
 import com.vanmool.productservice.repositories.ProductRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,7 +31,9 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -110,9 +117,11 @@ public class ProductDbService implements ProductService{
         JsonNode productNode = objectMapper.valueToTree(ProductResponseDto.from(existingProduct));
         JsonNode patchedNode = patch.apply(productNode);
 
-        // A patch cannot change the id; everything else must pass the same rules as a POST or PUT body
+        // A patch cannot change the id, nor imageUrl, which is only the first of images; everything else must pass
+        // the same rules as a POST or PUT body
         if(patchedNode instanceof ObjectNode objectNode) {
             objectNode.remove("id");
+            objectNode.remove("imageUrl");
         }
         ProductRequestDto patchedProduct = objectMapper.treeToValue(patchedNode, ProductRequestDto.class);
         Set<ConstraintViolation<ProductRequestDto>> violations = validator.validate(patchedProduct);
@@ -159,12 +168,36 @@ public class ProductDbService implements ProductService{
         return (value == null || value.isBlank()) ? null : value.trim();
     }
 
+    private static List<ProductImage> images(List<ProductImageDto> images) {
+        if(images == null) {
+            return List.of();
+        }
+        return images.stream().map(image -> new ProductImage(image.url().trim(), blankToNull(image.altText()))).toList();
+    }
+
+    // Each name once, whatever its letter case: "Weight" twice would leave the shopper guessing which is right
+    private static List<ProductSpecification> specifications(List<ProductSpecificationDto> specifications) {
+        if(specifications == null) {
+            return List.of();
+        }
+        Set<String> names = new HashSet<>();
+        for(ProductSpecificationDto specification : specifications) {
+            if(!names.add(specification.name().trim().toLowerCase(Locale.ROOT))) {
+                throw new InvalidRequestException("specifications: \"" + specification.name().trim() + "\" appears more than once");
+            }
+        }
+        return specifications.stream()
+                .map(specification -> new ProductSpecification(specification.name().trim(), specification.value().trim()))
+                .toList();
+    }
+
     private void buildProduct(Product product, ProductRequestDto productRequestDto) {
         // Copies every field of the request onto the product, so a field left out of the request becomes null
         product.setName(productRequestDto.getName());
         product.setDescription(productRequestDto.getDescription());
         product.setPrice(productRequestDto.getPrice());
-        product.setImageUrl(productRequestDto.getImageUrl());
+        product.setImages(images(productRequestDto.getImages()));
+        product.setSpecifications(specifications(productRequestDto.getSpecifications()));
         product.setOriginRegion(productRequestDto.getOriginRegion());
         product.setMaterials(productRequestDto.getMaterials());
         product.setStory(productRequestDto.getStory());

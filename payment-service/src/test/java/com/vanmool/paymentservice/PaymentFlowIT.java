@@ -18,11 +18,13 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.net.http.HttpClient;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -51,7 +53,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PaymentFlowIT {
     private final UUID userId = UUID.randomUUID();
     private final UUID orderId = UUID.randomUUID();
-    private final RestClient http = RestClient.builder().baseUrl("http://localhost:18085").build();
+    // A browser-like client that does not follow redirects, so the gateway's redirect to the callback can be checked
+    private final RestClient http = RestClient.builder().baseUrl("http://localhost:18085")
+            .requestFactory(new JdkClientHttpRequestFactory(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()))
+            .build();
 
     @Autowired
     private MockMvc mockMvc;

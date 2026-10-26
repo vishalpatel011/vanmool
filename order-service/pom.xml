@@ -15,6 +15,8 @@
     <description>Orders for Vanmool: checkout from the cart, order history and cancellation</description>
     <properties>
         <java.version>17</java.version>
+        <!-- The Spring Cloud release train that goes with Spring Boot 3.5 -->
+        <spring-cloud.version>2025.0.3</spring-cloud.version>
     </properties>
     <dependencies>
         <dependency>
@@ -75,7 +77,34 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Service discovery (Day 223): registers with Eureka, and finds other services by name through Spring
+             Cloud LoadBalancer -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+        <!-- Lets the load balancer try another instance when the one it chose fails -->
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+        <!-- /actuator/health: Eureka marks an instance DOWN when its health is DOWN -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
     </dependencies>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
         <plugins>

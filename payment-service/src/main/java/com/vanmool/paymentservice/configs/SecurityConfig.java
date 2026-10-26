@@ -27,7 +27,8 @@ public class SecurityConfig {
                 .logout(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/payments/webhooks/**", "/payments/callback/**", "/fake-gateway/**", "/error").permitAll()
+                        .requestMatchers("/payments/webhooks/**", "/payments/callback/**", "/fake-gateway/**", "/error",
+                                "/actuator/health", "/actuator/info").permitAll()
                         .requestMatchers(HttpMethod.POST, "/payments/reconciliation").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(resourceServer -> resourceServer

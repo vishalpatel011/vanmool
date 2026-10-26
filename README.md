@@ -66,7 +66,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | `payment-service` | Payment links (Razorpay, Stripe), webhooks, callbacks, reconciliation | MySQL (`payment_db`) | In progress |
 | `notification-service` | Emails for events on Kafka: welcome, order placed, order cancelled | Redis (handled event ids) | In progress |
 | `api-gateway` | Single entry point and request routing | | Planned |
-| `service-discovery` | Eureka service registry | | Planned |
+| `service-discovery` | Eureka service registry: every service registers here and finds the others by name | | In progress |
 
 ## Tech stack
 
@@ -112,6 +112,7 @@ vanmool/
 ├── order-service/      orders (same layout; clients/ holds the calls to cart-service and product-service)
 ├── notification-service/  emails from Kafka events (events/ listeners, emails/ composing and sending; no HTTP API)
 ├── payment-service/    payments (gateways/ holds Razorpay, Stripe and the fake gateway behind one interface)
+├── service-discovery/  Eureka service registry (a Spring Boot application with @EnableEurekaServer)
 └── product-service/     product catalog service
     ├── pom.xml
     └── src/
@@ -199,9 +200,10 @@ Each service reads its settings from the environment of its own process, so the 
 | `PRODUCT_CACHE_TTL` | Longest time a product stays cached (ISO-8601 duration) | `PT10M` (10 minutes) | not used | not used | not used |
 | `AUTH_ISSUER` | Issuer of the tokens: user-auth-service's public URL | not used | `http://localhost:8081` | `http://localhost:8081` | `http://localhost:8081` |
 | `AUTH_JWKS_URI` | Where user-auth-service publishes its public keys | not used | not used | `http://localhost:8081/oauth2/jwks` | `http://localhost:8081/oauth2/jwks` |
-| `PRODUCT_SERVICE_URL` | Base URL of product-service | not used | not used | `http://localhost:8080` | `http://localhost:8080` |
+| `PRODUCT_SERVICE_URL` | Base URL of product-service: a service name, resolved through Eureka | not used | not used | `http://product-service` | `http://product-service` |
 | `CART_TTL` | A cart untouched for this long is deleted (ISO-8601 duration) | not used | not used | `P30D` (30 days) | not used |
-| `CART_SERVICE_URL` | Base URL of cart-service | not used | not used | not used | `http://localhost:8082` |
+| `CART_SERVICE_URL` | Base URL of cart-service: a service name, resolved through Eureka | not used | not used | not used | `http://cart-service` |
+| `EUREKA_URL` | Where the service registers and reads the registry | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` |
 
 - **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
 - **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
@@ -216,14 +218,34 @@ Never commit real credentials. `.env` is git-ignored for this reason.
 .\mvnw.cmd verify      # the same from Windows PowerShell or cmd
 ```
 
-To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user-auth-service verify`, `./mvnw -pl cart-service verify`, `./mvnw -pl order-service verify` or `./mvnw -pl notification-service verify`.
+To build a single service: `./mvnw -pl product-service verify`, `./mvnw -pl user-auth-service verify`, `./mvnw -pl cart-service verify`, `./mvnw -pl order-service verify`, `./mvnw -pl notification-service verify`, `./mvnw -pl payment-service verify` or `./mvnw -pl service-discovery verify`. The tests run without a Eureka server: `src/test/resources/config/application.properties` turns the Eureka client off.
 
 ### 5. Run
 
-- **IntelliJ IDEA:** open the `vanmool` folder and run `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`, `NotificationServiceApplication` or `PaymentServiceApplication`.
-- **Command line:** `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`)
+Start the service registry first, then the services:
 
-The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082`, the order service on `http://localhost:8083` and the payment service on `http://localhost:8085`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+- **IntelliJ IDEA:** open the `vanmool` folder and run `ServiceDiscoveryApplication`, then `ProductServiceApplication`, `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`, `NotificationServiceApplication` or `PaymentServiceApplication`.
+- **Command line:** `./mvnw -pl service-discovery spring-boot:run`, then `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`, `payment-service`)
+
+The registry listens on `http://localhost:8761`, which is also its dashboard of registered instances. The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082`, the order service on `http://localhost:8083` and the payment service on `http://localhost:8085`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+
+## Service discovery (Eureka)
+
+Services do not know each other's addresses. Each one registers with the registry (`service-discovery`, Netflix Eureka through Spring Cloud) when it starts, under its `spring.application.name`: `PRODUCT-SERVICE`, `USER-AUTH-SERVICE`, `CART-SERVICE`, `ORDER-SERVICE`, `PAYMENT-SERVICE`. It then sends a heartbeat every 30 seconds, and removes itself when it shuts down. The notification service has no HTTP API, so nothing needs to find it.
+
+- **Calls by name, with client-side load balancing.** The cart service calls `http://product-service/products/{id}`; the order service `http://cart-service` and `http://product-service`; the payment service `http://order-service`. Spring Cloud LoadBalancer resolves the name to the instances the registry knows and takes them in turn (round robin), so a second instance of a service shares the work without any change to its callers. Calls go straight from service to service, not through the API gateway, which would add a hop.
+- **Health decides who gets traffic.** Each service publishes `/actuator/health` (and `/actuator/info`; nothing else, because endpoints such as the environment or a heap dump would give too much away). Its status in the registry follows that health: an instance whose database is down is shown `DOWN` and gets no calls. The product service leaves Redis out of its health, because it keeps working without its cache.
+- **No instance up** means a call fails at once, like a service that cannot be reached: the caller answers 503 (`PRODUCT_SERVICE_UNAVAILABLE`, `CART_SERVICE_UNAVAILABLE`, `ORDER_SERVICE_UNAVAILABLE`), never 500.
+- **A crashed instance does not cost callers anything.** A service that stops normally removes itself from the registry at once. One that crashes stays listed until it misses its heartbeats, and the load balancer may still pick it meanwhile; such a call is tried once more on another instance (Spring Retry), so it still succeeds. Every call between the services is safe to repeat: reads, and stock reservations and releases, which the product service keys by the order id.
+- **Timings.** Heartbeats every 10 seconds, a 30-second lease, and 10-second caches in the registry, the callers and their load balancers (Eureka's defaults are three to six times longer). Measured locally with two product-service instances (round robin: 5 calls each out of 10):
+
+  | Event | Measured |
+  |---|---|
+  | A new instance starts | first call reaches it 17 s later |
+  | An instance crashes | gone from the registry 64 s later; callers stop picking it after 74 s. Until then, the calls that picked it took about 1 s longer (a refused connection takes a second on Windows), and none failed (42 of 42 cart reads succeeded) |
+  | Redis stops, so cart-service's health is DOWN | `DOWN` in the registry 5 s later; checkout answers 503 at once (10 to 60 ms) instead of waiting for Redis |
+  | Redis is back | `UP` 32 s later; checkout works again after 35 s |
+- **Without the registry**, the services still start and keep their last copy of the registry. Locally, Eureka's self-preservation is off (`EUREKA_SELF_PRESERVATION`): with only a few instances it would mostly keep instances that were simply stopped.
 
 ## Product Service API
 
@@ -665,7 +687,8 @@ Errors use the same format as the other services. Codes: `ORDER_NOT_FOUND`, `PAY
 | Variable | Description | Default |
 |---|---|---|
 | `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | The payment database | `jdbc:mysql://localhost:3306/payment_db`, `PaymentService_user`, empty |
-| `ORDER_SERVICE_URL` | Base URL of order-service | `http://localhost:8083` |
+| `ORDER_SERVICE_URL` | Base URL of order-service: a service name, resolved through Eureka | `http://order-service` |
+| `EUREKA_URL` | Where the service registers and reads the registry | `http://localhost:8761/eureka/` |
 | `AUTH_ISSUER`, `AUTH_JWKS_URI` | Token issuer and public keys, as in the cart service | `http://localhost:8081`, `.../oauth2/jwks` |
 | `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses | `localhost:9092` |
 | `PAYMENT_PUBLIC_BASE_URL` | Public address for gateway callbacks and webhooks | `http://localhost:8085` |
@@ -786,7 +809,8 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Order tracking: the operations team ships and delivers orders (carrier, tracking number); each order keeps its status history
 - [x] Stock and stock reservations (inside the product service)
 - [x] Notification service: welcome, order, payment, cancellation, shipping and delivery emails from Kafka events, each sent once
-- [ ] Spring Cloud: Eureka service discovery and API Gateway
+- [x] Spring Cloud: Eureka service discovery; services call each other by name with client-side load balancing
+- [ ] Spring Cloud: API Gateway
 - [ ] Docker and Docker Compose
 
 ## Future scope

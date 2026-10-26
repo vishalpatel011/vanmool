@@ -2,11 +2,14 @@ package com.vanmool.userauthservice.services;
 
 import com.vanmool.userauthservice.configs.KafkaConfig;
 import com.vanmool.userauthservice.events.OutboxWriter;
+import com.vanmool.userauthservice.events.PasswordChangedEvent;
 import com.vanmool.userauthservice.events.UserRegisteredEvent;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
+import com.vanmool.userauthservice.exceptions.IncorrectPasswordException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
 import com.vanmool.userauthservice.exceptions.InvalidTokenException;
+import com.vanmool.userauthservice.exceptions.PasswordUnchangedException;
 import com.vanmool.userauthservice.exceptions.UserNotFoundException;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.Token;
@@ -153,6 +156,41 @@ public class UserServiceImpl implements UserService {
         User user = getUser(userId);
         user.getRoles().add(role);
         return userRepository.save(user);
+    }
+
+    // PATCH: a field left out (null) stays as it is
+    @Override
+    @Transactional
+    public User updateProfile(UUID userId, String name) {
+        User user = getUser(userId);
+        if (name != null) {
+            user.setName(name.trim());
+        }
+        return userRepository.save(user);
+    }
+
+    // The BCrypt work (about 0.3 s per check or hash) is done before the transaction, as at signup. Then, in one
+    // transaction: the new hash, the end of the user's other sessions, and the PasswordChanged event
+    @Override
+    public void changePassword(UUID userId, UUID currentTokenId, String currentPassword, String newPassword) {
+        User user = getUser(userId);
+        if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+            throw new IncorrectPasswordException();
+        }
+        if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
+            throw new PasswordUnchangedException();
+        }
+        String newHash = passwordEncoder.encode(newPassword);
+        transactionTemplate.executeWithoutResult(status -> {
+            // Loaded again inside the transaction, so the change is saved by dirty checking (an UPDATE of the user
+            // row only) and not by merging the copy read above
+            User managed = userRepository.findById(userId).orElseThrow(() -> new UserNotFoundException(userId));
+            managed.setPasswordHash(newHash);
+            // Whoever may know the old password is signed out everywhere; the device making the change stays in
+            tokenRepository.revokeOtherTokens(userId, currentTokenId, clock.instant());
+            outboxWriter.add(KafkaConfig.USER_EVENTS_TOPIC, userId.toString(),
+                    PasswordChangedEvent.of(userId, managed.getName(), managed.getEmail(), clock.instant()));
+        });
     }
 
     private static String normalizeEmail(String email) {

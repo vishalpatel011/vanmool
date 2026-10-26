@@ -2,6 +2,8 @@ package com.vanmool.userauthservice.controllers;
 
 import com.vanmool.userauthservice.configs.JwtConfig;
 import com.vanmool.userauthservice.configs.SecurityConfig;
+import com.vanmool.userauthservice.exceptions.IncorrectPasswordException;
+import com.vanmool.userauthservice.exceptions.PasswordUnchangedException;
 import com.vanmool.userauthservice.exceptions.UserNotFoundException;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.User;
@@ -16,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -27,10 +30,15 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -45,6 +53,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class UserControllerWebMvcTest {
     private static final UUID ASHA_ID = UUID.fromString("5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10");
     private static final UUID PRODUCER_ID = UUID.fromString("9a1d6c2e-0b37-4f58-8e21-7c4b3a5d6e90");
+    private static final UUID TOKEN_ID = UUID.fromString("0f6e2b8a-77d4-4e8a-b1f3-3c2d9a5e4b71");
+    private static final String CHANGE_PASSWORD = """
+            { "currentPassword": "correct horse battery", "newPassword": "tribal weave pattern" }""";
 
     @Autowired
     private MockMvc mockMvc;
@@ -122,6 +133,128 @@ class UserControllerWebMvcTest {
             mockMvc.perform(get("/users/me").with(tokenFor(ASHA_ID, "CUSTOMER")))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error").value("USER_NOT_FOUND"));
+        }
+    }
+
+    @Nested
+    @DisplayName("PATCH /users/me")
+    class UpdateProfile {
+        @Test
+        void newName_returnsTheWholeProfile() throws Exception {
+            // Arrange
+            User renamed = user(ASHA_ID, "asha@example.com", Role.CUSTOMER);
+            renamed.setName("Asha Vasava");
+            when(userService.updateProfile(ASHA_ID, "Asha Vasava")).thenReturn(renamed);
+
+            // Act & Assert
+            mockMvc.perform(patch("/users/me").with(tokenFor(ASHA_ID, "CUSTOMER"))
+                            .contentType(MediaType.APPLICATION_JSON).content("{ \"name\": \"Asha Vasava\" }"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().json("""
+                            {
+                              "id": "5b0e8f3c-2a41-4c47-9d0a-6f1c2e7b9a10",
+                              "name": "Asha Vasava",
+                              "email": "asha@example.com",
+                              "roles": ["CUSTOMER"]
+                            }""", JsonCompareMode.STRICT));
+        }
+
+        @Test
+        void emptyBody_changesNothing() throws Exception {
+            when(userService.updateProfile(eq(ASHA_ID), isNull())).thenReturn(user(ASHA_ID, "asha@example.com", Role.CUSTOMER));
+
+            mockMvc.perform(patch("/users/me").with(tokenFor(ASHA_ID, "CUSTOMER"))
+                            .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.name").value("Test User"));
+        }
+
+        @Test
+        void blankOrTooLongName_returns400() throws Exception {
+            mockMvc.perform(patch("/users/me").with(tokenFor(ASHA_ID, "CUSTOMER"))
+                            .contentType(MediaType.APPLICATION_JSON).content("{ \"name\": \"   \" }"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.message").value("name: must not be blank"));
+            mockMvc.perform(patch("/users/me").with(tokenFor(ASHA_ID, "CUSTOMER"))
+                            .contentType(MediaType.APPLICATION_JSON).content("{ \"name\": \"" + "a".repeat(101) + "\" }"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("name: size must be between 0 and 100"));
+            verifyNoInteractions(userService);
+        }
+
+        @Test
+        void withoutAToken_returns401() throws Exception {
+            mockMvc.perform(patch("/users/me").contentType(MediaType.APPLICATION_JSON).content("{ \"name\": \"X\" }"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.error").value("INVALID_TOKEN"));
+            verifyNoInteractions(userService);
+        }
+    }
+
+    @Nested
+    @DisplayName("PUT /users/me/password")
+    class ChangePassword {
+        private RequestPostProcessor ashasLoginToken() {
+            return jwt().jwt(token -> token.subject(ASHA_ID.toString()).jti(TOKEN_ID.toString()))
+                    .authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
+        }
+
+        @Test
+        void validRequest_returns204_andNamesTheSessionToKeep() throws Exception {
+            mockMvc.perform(put("/users/me/password").with(ashasLoginToken())
+                            .contentType(MediaType.APPLICATION_JSON).content(CHANGE_PASSWORD))
+                    .andExpect(status().isNoContent());
+            verify(userService).changePassword(ASHA_ID, TOKEN_ID, "correct horse battery", "tribal weave pattern");
+        }
+
+        @Test
+        void tokenWithoutAnId_passesNoSessionToKeep() throws Exception {
+            mockMvc.perform(put("/users/me/password").with(tokenFor(ASHA_ID, "CUSTOMER"))
+                            .contentType(MediaType.APPLICATION_JSON).content(CHANGE_PASSWORD))
+                    .andExpect(status().isNoContent());
+            verify(userService).changePassword(eq(ASHA_ID), isNull(), eq("correct horse battery"), eq("tribal weave pattern"));
+        }
+
+        @Test
+        void wrongCurrentPassword_returns403_notA401ThatWouldSignTheUserOut() throws Exception {
+            doThrow(new IncorrectPasswordException()).when(userService)
+                    .changePassword(ASHA_ID, TOKEN_ID, "correct horse battery", "tribal weave pattern");
+
+            mockMvc.perform(put("/users/me/password").with(ashasLoginToken())
+                            .contentType(MediaType.APPLICATION_JSON).content(CHANGE_PASSWORD))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.error").value("CURRENT_PASSWORD_INCORRECT"))
+                    .andExpect(jsonPath("$.message").value("The current password is not correct"));
+        }
+
+        @Test
+        void sameNewPassword_returns400() throws Exception {
+            doThrow(new PasswordUnchangedException()).when(userService)
+                    .changePassword(ASHA_ID, TOKEN_ID, "correct horse battery", "tribal weave pattern");
+
+            mockMvc.perform(put("/users/me/password").with(ashasLoginToken())
+                            .contentType(MediaType.APPLICATION_JSON).content(CHANGE_PASSWORD))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.message").value("newPassword: must be different from the current password"));
+        }
+
+        @Test
+        void shortNewPassword_orNoCurrentPassword_returns400() throws Exception {
+            mockMvc.perform(put("/users/me/password").with(ashasLoginToken())
+                            .contentType(MediaType.APPLICATION_JSON).content("{ \"newPassword\": \"short\" }"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value(
+                            "currentPassword: must not be blank; newPassword: must be at least 8 characters long"));
+            verifyNoInteractions(userService);
+        }
+
+        @Test
+        void withoutAToken_returns401() throws Exception {
+            mockMvc.perform(put("/users/me/password").contentType(MediaType.APPLICATION_JSON).content(CHANGE_PASSWORD))
+                    .andExpect(status().isUnauthorized());
+            verifyNoInteractions(userService);
         }
     }
 

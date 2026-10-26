@@ -1,5 +1,6 @@
 package com.vanmool.userauthservice;
 
+import com.vanmool.userauthservice.repositories.TokenRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,12 +12,16 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 // Integration test: the whole application on a random port against the MySQL database in DB_URL, called over real
@@ -32,6 +37,12 @@ class AuthFlowIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private TokenRepository tokenRepository;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     @AfterEach
     void removeTheTestUser() {
         jdbcTemplate.update("DELETE FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.email') = ?", email);
@@ -41,9 +52,13 @@ class AuthFlowIT {
     }
 
     private ResponseEntity<Map> callWithToken(HttpMethod method, String path, String token) {
+        return callWithToken(method, path, token, null);
+    }
+
+    private ResponseEntity<Map> callWithToken(HttpMethod method, String path, String token, Map<String, String> body) {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
-        return restTemplate.exchange(path, method, new HttpEntity<>(headers), Map.class);
+        return restTemplate.exchange(path, method, new HttpEntity<>(body, headers), Map.class);
     }
 
     @Test
@@ -108,10 +123,70 @@ class AuthFlowIT {
     }
 
     private String login() {
+        return login("correct horse battery");
+    }
+
+    private String login(String password) {
         ResponseEntity<Map> login = restTemplate.postForEntity("/auth/login",
-                Map.of("email", email, "password", "correct horse battery"), Map.class);
+                Map.of("email", email, "password", password), Map.class);
         assertEquals(HttpStatus.OK, login.getStatusCode());
         return (String) login.getBody().get("token");
+    }
+
+    @Test
+    void profileChange_andPasswordChange_whichEndsTheOtherSessions() {
+        // Arrange: one account signed in on two devices
+        restTemplate.postForEntity("/auth/signup",
+                Map.of("name", "Integration Test", "email", email, "password", "correct horse battery"), Map.class);
+        String phone = login();
+        String laptop = login();
+        String oldHash = jdbcTemplate.queryForObject("SELECT password_hash FROM users WHERE email = ?", String.class, email);
+
+        // The name changes (trimmed); the email stays
+        ResponseEntity<Map> renamed = callWithToken(HttpMethod.PATCH, "/users/me", phone, Map.of("name", "  Renamed Test "));
+        assertEquals(HttpStatus.OK, renamed.getStatusCode());
+        assertEquals("Renamed Test", renamed.getBody().get("name"));
+        assertEquals(email, renamed.getBody().get("email"));
+
+        // A wrong current password changes nothing
+        ResponseEntity<Map> wrong = callWithToken(HttpMethod.PUT, "/users/me/password", phone,
+                Map.of("currentPassword", "a guess", "newPassword", "tribal weave pattern"));
+        assertEquals(HttpStatus.FORBIDDEN, wrong.getStatusCode());
+        assertEquals("CURRENT_PASSWORD_INCORRECT", wrong.getBody().get("error"));
+        assertEquals(HttpStatus.OK, callWithToken(HttpMethod.GET, "/users/me", laptop).getStatusCode());
+
+        // Change it from the phone
+        ResponseEntity<Map> changed = callWithToken(HttpMethod.PUT, "/users/me/password", phone,
+                Map.of("currentPassword", "correct horse battery", "newPassword", "tribal weave pattern"));
+        assertEquals(HttpStatus.NO_CONTENT, changed.getStatusCode());
+
+        // The phone stays signed in; the laptop's session has ended
+        assertEquals(HttpStatus.OK, callWithToken(HttpMethod.GET, "/users/me", phone).getStatusCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, callWithToken(HttpMethod.GET, "/users/me", laptop).getStatusCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, callWithToken(HttpMethod.GET, "/auth/validate", laptop).getStatusCode());
+
+        // Only the new password signs in; a new BCrypt hash is stored
+        ResponseEntity<Map> oldLogin = restTemplate.postForEntity("/auth/login",
+                Map.of("email", email, "password", "correct horse battery"), Map.class);
+        assertEquals(HttpStatus.UNAUTHORIZED, oldLogin.getStatusCode());
+        assertNotNull(login("tribal weave pattern"));
+        String newHash = jdbcTemplate.queryForObject("SELECT password_hash FROM users WHERE email = ?", String.class, email);
+        assertNotEquals(oldHash, newHash);
+        assertEquals("$2a$12$", newHash.substring(0, 7));
+
+        // The PasswordChanged event was recorded with the change, without any password in it
+        List<String> payloads = jdbcTemplate.queryForList(
+                "SELECT CAST(payload AS CHAR) FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.email') = ? AND event_type = 'PasswordChanged'",
+                String.class, email);
+        assertEquals(1, payloads.size());
+        assertFalse(payloads.get(0).contains("tribal") || payloads.get(0).contains("$2a$"), payloads.get(0));
+
+        // A change made with a token that has no row here (from /oauth2/token) keeps no session: the query's
+        // "keep IS NULL" branch, against MySQL. Two are still active: the phone and the last login
+        UUID userId = UUID.fromString((String) renamed.getBody().get("id"));
+        Integer revoked = transactionTemplate.execute(status -> tokenRepository.revokeOtherTokens(userId, null, Instant.now()));
+        assertEquals(2, revoked);
+        assertEquals(HttpStatus.UNAUTHORIZED, callWithToken(HttpMethod.GET, "/users/me", phone).getStatusCode());
     }
 
     @Test

@@ -379,6 +379,8 @@ The user-auth service (port 8081) owns user accounts. It never stores or returns
 | POST | `/auth/logout` | 204, the token stops working | 401 missing or malformed `Authorization` header |
 | GET | `/auth/validate` | 200, the token's user | 401 token missing, invalid, expired or revoked |
 | GET | `/users/me` | 200, the signed-in user | 401 token missing, invalid, expired or revoked |
+| PATCH | `/users/me` | 200, the profile with the fields sent changed | 400 invalid field, 401 |
+| PUT | `/users/me/password` | 204, the password is changed and the user's other sessions end | 400 invalid or unchanged new password, 401, 403 current password incorrect |
 | PUT | `/users/{id}/roles/{role}` | 200, the user with the role added (ADMIN only) | 400 unknown role, 401 no valid token, 403 not an ADMIN, 404 user not found |
 
 Request body for `POST /auth/signup`:
@@ -404,12 +406,16 @@ Every new account has the `CUSTOMER` role.
 `POST /auth/login` takes `{ "email": "...", "password": "..." }` and answers:
 
 ```json
-{ "token": "5m9ew8_eJUU4RFqV69tOEITqm-Fa7SwkZi4ToZLFsZ0", "tokenType": "Bearer", "expiresAt": "2026-10-25T22:03:30Z" }
+{ "token": "eyJraWQiOi...(a JWT, shortened here)", "tokenType": "Bearer", "expiresAt": "2026-10-25T22:03:30Z" }
 ```
 
 The client sends the token on later requests as `Authorization: Bearer <token>`. The token is a JWT signed with RS256: its header names the signing key (`kid`), and its payload carries the issuer, the user's id (`sub`), the token's id (`jti`), email, roles, and issue and expiry times. Tokens are valid for 10 hours (`auth.token-validity`) unless the user logs out first: logout marks the token's `jti` as revoked, and both `/auth/validate` and protected endpoints such as `/users/me` refuse it from then on.
 
 Passwords are checked by Spring Security (a `UserDetailsService` that reads `user_db`, and the BCrypt `PasswordEncoder`). A wrong password and an unknown email get the same `401 INVALID_CREDENTIALS` answer, after the same BCrypt work, so the API does not reveal which emails have accounts.
+
+**Profile.** `PATCH /users/me` changes only the fields it is sent; today that is `name` (not blank, at most 100 characters), for example `{ "name": "Asha Vasava" }`. The email cannot be changed here: a new address would first have to be confirmed through a link sent to it, and the email is also held in tokens and orders.
+
+**Changing the password.** `PUT /users/me/password` takes `{ "currentPassword": "...", "newPassword": "..." }`. The current password is asked for again although the request carries a valid token, so a token left on a shared or stolen device is not enough to take over the account; a wrong one gets `403 CURRENT_PASSWORD_INCORRECT` (not 401, which would sign the user out). The new password follows the signup rules and must differ from the current one. On success the new BCrypt hash is stored, every other session of the user is revoked (the device that made the change stays signed in), and a `PasswordChanged` event makes the notification service email the user, so a change they did not make does not go unnoticed. The other services check tokens locally with the public keys, so there an ended session works until its token expires.
 
 Roles: every new account is a `CUSTOMER`. An `ADMIN` can grant `SELLER` (for producers who list products) or `ADMIN` with `PUT /users/{id}/roles/{role}`. The first administrator is made directly in the database:
 
@@ -417,7 +423,7 @@ Roles: every new account is a `CUSTOMER`. An `ADMIN` can grant `SELLER` (for pro
 INSERT INTO user_role (user_id, role) SELECT id, 'ADMIN' FROM users WHERE email = 'admin@example.com';
 ```
 
-Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `FORBIDDEN` (403), `USER_NOT_FOUND` (404), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
+Errors use the same format as the product service (`timestamp`, `status`, `error`, `message`, `path`). Codes: `EMAIL_ALREADY_REGISTERED` (409), `INVALID_CREDENTIALS` (401), `INVALID_TOKEN` (401, with `WWW-Authenticate: Bearer`), `FORBIDDEN` and `CURRENT_PASSWORD_INCORRECT` (403), `USER_NOT_FOUND` (404), `VALIDATION_FAILED`, `INVALID_PARAMETER` and `MALFORMED_REQUEST` (400).
 
 ### OAuth2 and OpenID Connect
 
@@ -650,6 +656,7 @@ Services tell each other what happened through Kafka, when the sender does not n
 | Topic | Owner (producer) | Event | Key | Consumers |
 |---|---|---|---|---|
 | `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
+| `user-events` | user-auth-service | `PasswordChanged`: `userId`, `name`, `email` (never a password or hash) | user id | notification-service (security notice) |
 | `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation) |
 | `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount`, `reason` (`CUSTOMER` or `PAYMENT_TIMEOUT`) | order id | product-service (puts the stock back), payment-service (closes the open payment link), notification-service |
 | `order-events` | order-service | `OrderShipped`: `orderId`, `userId`, `customerEmail`, `carrier`, `trackingNumber` (may be null) | order id | notification-service |
@@ -684,6 +691,7 @@ The notification service has no API. It reads `user-events`, `order-events` and 
 | Event | Email |
 |---|---|
 | `UserRegistered` | "Welcome to Vanmool", to the new account's address |
+| `PasswordChanged` | "Your Vanmool password was changed": when (IST), that other devices were signed out, and what to do if it was not them |
 | `OrderPlaced` | "Your Vanmool order 7c9e6679 is placed": each product with its quantity and line total, the total in rupees (₹1,359.98), and the delivery address |
 | `OrderCancelled` | "Your Vanmool order 7c9e6679 is cancelled", saying so when the payment did not arrive in time |
 | `OrderShipped` | "Your Vanmool order 7c9e6679 is on its way": the carrier and the tracking number |
@@ -737,6 +745,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Unit tests with JUnit 5 and Mockito, unit and integration tests run separately, JaCoCo coverage
 - [x] MockMvc web layer tests with JSON assertions
 - [x] User Auth Service: signup and login with BCrypt, JWT, Spring Security, OAuth2 / OpenID Connect
+- [x] Profile management: change the name, change the password (other sessions end, security email)
 - [ ] AWS deployment: EC2, Elastic Beanstalk, VPC, RDS
 - [x] Redis: product cache
 - [x] Redis: cart storage

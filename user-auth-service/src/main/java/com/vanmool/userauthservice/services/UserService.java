@@ -17,4 +17,8 @@ public interface UserService {
     User getUser(UUID userId);
 
     User grantRole(UUID userId, Role role);
+
+    User updateProfile(UUID userId, String name);
+
+    void changePassword(UUID userId, UUID currentTokenId, String currentPassword, String newPassword);
 }

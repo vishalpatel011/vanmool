@@ -77,6 +77,19 @@ class EventListenersTest {
     }
 
     @Test
+    void passwordChanged_sendsTheSecurityNotice() throws Exception {
+        // Act: the JSON user-auth-service publishes
+        listeners.onUserEvent("""
+                { "eventId": "0b6f3c1e-8a0d-4f7e-9a51-3c2a6e8d9f10", "eventType": "PasswordChanged",
+                  "occurredAt": "2026-10-26T10:15:00Z", "userId": "a8c1e6ff-556d-4dd2-a238-148b3fca351c",
+                  "name": "Asha Gamit", "email": "asha@example.com" }""");
+
+        // Assert
+        assertEquals("Your Vanmool password was changed", sentEmail().subject());
+        verify(handledEvents).add(EVENT_ID);
+    }
+
+    @Test
     void orderPlaced_sendsTheConfirmation() throws Exception {
         // Act
         listeners.onOrderEvent(ORDER_PLACED);

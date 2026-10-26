@@ -42,6 +42,20 @@ public class EmailComposer {
         return new Email(event.email(), "Welcome to Vanmool", body);
     }
 
+    // A security notice: if someone else changed the password, the owner learns of it at once
+    public Email passwordChanged(Events.PasswordChanged event) {
+        String changedAt = event.occurredAt() == null ? "just now"
+                : "on " + RECEIPT_TIME.format(event.occurredAt().atZone(ZoneId.of("Asia/Kolkata")));
+        String body = """
+                Hello %s,
+
+                The password of your Vanmool account was changed %s. Your other devices have been signed out.
+
+                If you did not change it, someone else may know your password: please contact us straight away.
+                """.formatted(event.name(), changedAt) + SIGNATURE;
+        return new Email(event.email(), "Your Vanmool password was changed", body);
+    }
+
     public Email orderConfirmation(Events.OrderPlaced event) {
         // One line per product, then the total, in two columns:   2 x Handcrafted Bamboo Basket       ₹999.98
         StringBuilder lines = new StringBuilder();

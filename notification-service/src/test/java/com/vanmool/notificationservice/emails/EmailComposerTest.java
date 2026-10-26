@@ -43,6 +43,20 @@ class EmailComposerTest {
     }
 
     @Test
+    void passwordChanged_saysWhen_inIst_andWhatToDoIfItWasNotThem() {
+        // 10:15 UTC is 3:45 PM in India
+        Email email = composer.passwordChanged(new Events.PasswordChanged(UUID.randomUUID(),
+                java.time.Instant.parse("2026-10-26T10:15:00Z"), UUID.randomUUID(), "Asha Gamit", "asha@example.com"));
+
+        assertEquals("asha@example.com", email.to());
+        assertEquals("Your Vanmool password was changed", email.subject());
+        assertTrue(email.body().startsWith("Hello Asha Gamit,"), email.body());
+        assertTrue(email.body().contains("was changed on 26 Oct 2026, 3:45 PM IST. Your other devices have been signed out."),
+                email.body());
+        assertTrue(email.body().contains("If you did not change it"), email.body());
+    }
+
+    @Test
     void orderConfirmation_listsEachProductWithItsLineTotal_theTotal_andTheAddress() {
         // Act
         Email email = composer.orderConfirmation(new Events.OrderPlaced(UUID.randomUUID(), ORDER_ID, "asha@example.com",

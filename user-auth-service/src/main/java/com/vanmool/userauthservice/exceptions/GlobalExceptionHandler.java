@@ -38,6 +38,16 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(errorDto, headers, HttpStatus.UNAUTHORIZED);
     }
 
+    @ExceptionHandler(IncorrectPasswordException.class)
+    public ResponseEntity<ErrorDto> handleIncorrectPassword(IncorrectPasswordException e, HttpServletRequest request) {
+        return buildError(HttpStatus.FORBIDDEN, "CURRENT_PASSWORD_INCORRECT", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(PasswordUnchangedException.class)
+    public ResponseEntity<ErrorDto> handlePasswordUnchanged(PasswordUnchangedException e, HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", e.getMessage(), request);
+    }
+
     @ExceptionHandler(UserNotFoundException.class)
     public ResponseEntity<ErrorDto> handleUserNotFound(UserNotFoundException e, HttpServletRequest request) {
         return buildError(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", e.getMessage(), request);

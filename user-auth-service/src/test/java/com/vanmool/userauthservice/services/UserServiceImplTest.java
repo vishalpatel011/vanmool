@@ -1,13 +1,16 @@
 package com.vanmool.userauthservice.services;
 
 import com.vanmool.userauthservice.events.OutboxWriter;
+import com.vanmool.userauthservice.events.PasswordChangedEvent;
 import com.vanmool.userauthservice.events.UserRegisteredEvent;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.vanmool.userauthservice.exceptions.EmailAlreadyRegisteredException;
+import com.vanmool.userauthservice.exceptions.IncorrectPasswordException;
 import com.vanmool.userauthservice.exceptions.InvalidCredentialsException;
 import com.vanmool.userauthservice.exceptions.InvalidTokenException;
+import com.vanmool.userauthservice.exceptions.PasswordUnchangedException;
 import com.vanmool.userauthservice.exceptions.UserNotFoundException;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.Token;
@@ -21,6 +24,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -41,12 +45,14 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.eq;
@@ -414,6 +420,122 @@ class UserServiceImplTest {
             // Act & Assert
             assertThrows(UserNotFoundException.class, () -> userService.grantRole(ASHA_ID, Role.SELLER));
             verify(userRepository, never()).save(any());
+        }
+    }
+
+    @Nested
+    class UpdateProfile {
+        @Test
+        void newName_isStoredTrimmed_andTheEmailAndRolesStay() {
+            // Arrange
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.of(asha()));
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            // Act
+            User result = userService.updateProfile(ASHA_ID, "  Asha Vasava ");
+
+            // Assert
+            assertEquals("Asha Vasava", result.getName());
+            assertEquals("asha@example.com", result.getEmail());
+            assertEquals(Set.of(Role.CUSTOMER), result.getRoles());
+        }
+
+        @Test
+        void nameLeftOut_changesNothing() {
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.of(asha()));
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            assertEquals("Asha Gamit", userService.updateProfile(ASHA_ID, null).getName());
+        }
+
+        @Test
+        void unknownUser_throwsAndSavesNothing() {
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.empty());
+
+            assertThrows(UserNotFoundException.class, () -> userService.updateProfile(ASHA_ID, "Asha"));
+            verify(userRepository, never()).save(any());
+        }
+    }
+
+    @Nested
+    class ChangePassword {
+        private User managedAsha;
+
+        private void currentPasswordIs(String password) {
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.of(asha()));
+            when(passwordEncoder.matches(any(), eq("$2a$12$ashasHash")))
+                    .thenAnswer(invocation -> password.equals(invocation.getArgument(0)));
+        }
+
+        @Test
+        void correctCurrentPassword_storesTheNewHash_endsTheOtherSessions_andRecordsTheEvent() {
+            // Arrange
+            currentPasswordIs("correct horse battery");
+            when(passwordEncoder.encode("tribal weave pattern")).thenReturn("$2a$12$newHash");
+            managedAsha = asha();
+            when(userRepository.findById(ASHA_ID)).thenReturn(Optional.of(managedAsha));
+            ArgumentCaptor<PasswordChangedEvent> event = ArgumentCaptor.forClass(PasswordChangedEvent.class);
+
+            // Act
+            userService.changePassword(ASHA_ID, TOKEN_ID, "correct horse battery", "tribal weave pattern");
+
+            // Assert: the hash on the entity of the transaction (saved by dirty checking), the other sessions ended
+            // with the current one kept, then the event
+            assertEquals("$2a$12$newHash", managedAsha.getPasswordHash());
+            InOrder steps = inOrder(tokenRepository, outboxWriter);
+            steps.verify(tokenRepository).revokeOtherTokens(ASHA_ID, TOKEN_ID, NOW);
+            steps.verify(outboxWriter).add(eq("user-events"), eq(ASHA_ID.toString()), event.capture());
+            assertEquals("PasswordChanged", event.getValue().eventType());
+            assertEquals("asha@example.com", event.getValue().email());
+            assertEquals("Asha Gamit", event.getValue().name());
+            // Nothing in the event comes near the password
+            assertFalse(event.getValue().toString().contains("tribal"));
+            assertFalse(event.getValue().toString().contains("$2a$"));
+        }
+
+        @Test
+        void tokenWithoutARow_endsEverySession() {
+            // Arrange: a token from /oauth2/token, which has no row in the token table
+            currentPasswordIs("correct horse battery");
+            when(passwordEncoder.encode("tribal weave pattern")).thenReturn("$2a$12$newHash");
+            when(userRepository.findById(ASHA_ID)).thenReturn(Optional.of(asha()));
+
+            // Act
+            userService.changePassword(ASHA_ID, null, "correct horse battery", "tribal weave pattern");
+
+            // Assert
+            verify(tokenRepository).revokeOtherTokens(ASHA_ID, null, NOW);
+        }
+
+        @Test
+        void wrongCurrentPassword_isRefused_andNothingChanges() {
+            currentPasswordIs("correct horse battery");
+
+            assertThrows(IncorrectPasswordException.class,
+                    () -> userService.changePassword(ASHA_ID, TOKEN_ID, "a guess", "tribal weave pattern"));
+            verify(passwordEncoder, never()).encode(any());
+            verify(tokenRepository, never()).revokeOtherTokens(any(), any(), any());
+            verifyNoInteractions(outboxWriter);
+        }
+
+        @Test
+        void newPasswordSameAsTheCurrentOne_isRefused() {
+            currentPasswordIs("correct horse battery");
+
+            PasswordUnchangedException exception = assertThrows(PasswordUnchangedException.class,
+                    () -> userService.changePassword(ASHA_ID, TOKEN_ID, "correct horse battery", "correct horse battery"));
+            assertEquals("newPassword: must be different from the current password", exception.getMessage());
+            verify(passwordEncoder, never()).encode(any());
+            verifyNoInteractions(outboxWriter);
+        }
+
+        @Test
+        void unknownUser_throwsUserNotFound() {
+            when(userRepository.findWithRolesById(ASHA_ID)).thenReturn(Optional.empty());
+
+            assertThrows(UserNotFoundException.class,
+                    () -> userService.changePassword(ASHA_ID, TOKEN_ID, "correct horse battery", "tribal weave pattern"));
+            verifyNoInteractions(passwordEncoder, outboxWriter);
         }
     }
 }

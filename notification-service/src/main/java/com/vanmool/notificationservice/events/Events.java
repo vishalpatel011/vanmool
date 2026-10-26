@@ -19,6 +19,10 @@ public final class Events {
     public record UserRegistered(UUID eventId, UUID userId, String name, String email) {
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PasswordChanged(UUID eventId, Instant occurredAt, UUID userId, String name, String email) {
+    }
+
     // order-events, from order-service
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record OrderPlaced(UUID eventId, UUID orderId, String customerEmail, List<Item> items, BigDecimal totalAmount,

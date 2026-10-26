@@ -25,9 +25,18 @@ public class EventListeners {
     @KafkaListener(topics = "user-events")
     public void onUserEvent(String message) throws JsonProcessingException {
         JsonNode event = objectMapper.readTree(message);
-        if ("UserRegistered".equals(event.path("eventType").asText())) {
-            Events.UserRegistered registered = read(event, Events.UserRegistered.class);
-            notifier.sendOnce(registered.eventId(), emailComposer.welcome(registered));
+        switch (event.path("eventType").asText()) {
+            case "UserRegistered" -> {
+                Events.UserRegistered registered = read(event, Events.UserRegistered.class);
+                notifier.sendOnce(registered.eventId(), emailComposer.welcome(registered));
+            }
+            case "PasswordChanged" -> {
+                Events.PasswordChanged changed = read(event, Events.PasswordChanged.class);
+                notifier.sendOnce(changed.eventId(), emailComposer.passwordChanged(changed));
+            }
+            default -> {
+                // not an event that needs an email
+            }
         }
     }
 

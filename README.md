@@ -92,10 +92,10 @@ Target architecture (services are added one at a time; the table below shows wha
 | Mailpit | Catches the emails sent in development and shows them in a web page | In use |
 | Spring Mail (Jakarta Mail) | Sending email over SMTP | In use |
 | RestClient | Calls between services (cart to product), with timeouts | In use |
-| Spring Cloud Gateway, Eureka | Routing and service discovery | Planned |
+| Spring Cloud Gateway, Eureka | Routing, rate limits and service discovery | In use |
 | Razorpay Java SDK 1.4, Stripe Java SDK 34 | Payment links, webhook and callback signature checks | Implemented in test mode, verified with the SDKs' own signature checks (no live gateway accounts are used) |
 | Docker Compose | Local infrastructure (Redis, Kafka, Mailpit) | In use |
-| Docker | Containers for the services | Planned |
+| Docker | An image per service (two-stage build, layered jar, non-root user) | In use |
 | AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
 
 ## Repository structure
@@ -132,7 +132,7 @@ vanmool/
         └── test/
 ```
 
-Each service has its own `pom.xml` with the Spring Boot parent. The root `pom.xml` only lists the services as modules, so one command builds all of them, and each service can still be built, packaged and deployed on its own.
+Each service has its own `pom.xml` with the Spring Boot parent and its own `Dockerfile`. The root `pom.xml` only lists the services as modules, so one command builds all of them, and each service can still be built, packaged and deployed on its own.
 
 ## Getting started
 
@@ -231,6 +231,31 @@ Start the service registry first, then the services:
 - **Command line:** `./mvnw -pl service-discovery spring-boot:run`, then `./mvnw -pl api-gateway spring-boot:run` and `./mvnw -pl product-service spring-boot:run` (likewise `user-auth-service`, `cart-service`, `order-service`, `notification-service`, `payment-service`)
 
 The registry listens on `http://localhost:8761`, which is also its dashboard of registered instances. Clients use the API gateway at `http://localhost:8000`; each service can also still be called at its own port. The product service listens on `http://localhost:8080`, the user-auth service on `http://localhost:8081`, the cart service on `http://localhost:8082`, the order service on `http://localhost:8083` and the payment service on `http://localhost:8085`, so all of them can run at once. The notification service has no HTTP port: it only reads Kafka. The cart service needs Redis, tokens from the user-auth service, and the product service for prices; it starts without the other two and contacts them on the first request that needs them.
+
+## Docker
+
+Every service has a `Dockerfile` in its directory. To build an image:
+
+```
+docker build -t vanmool/product-service product-service
+```
+
+Likewise for `user-auth-service`, `cart-service`, `order-service`, `payment-service`, `notification-service`, `service-discovery` and `api-gateway`.
+
+How the images are built:
+
+- **Two stages.** The first stage compiles the service with Maven 3.9.9 and JDK 17 inside Docker, so the image does not depend on the Java or Maven installed on the machine that builds it. The second stage holds only a Java 17 runtime (Eclipse Temurin JRE) and the application; Maven, the JDK and the sources are left behind.
+- **Tests run before, not inside, the build.** `./mvnw verify` runs them; the image build skips them, because the integration tests need MySQL, Redis and Kafka.
+- **Dependencies cached between builds.** A BuildKit cache mount keeps Maven's downloads between builds without putting them into the image.
+- **Layers.** The jar is split into layers with Spring Boot's `jarmode=tools`: libraries (about 112 MB for product-service) and the application's own code (about 80 KB). A code change rebuilds only the small layer, so a new version is quick to push and pull.
+- **Not root.** The service runs as the user `vanmool`. The application files belong to root, so the service cannot change its own code.
+- **Signals reach Java.** `java` is the container's main process, so `docker stop` triggers Spring's graceful shutdown: the service finishes its requests and leaves Eureka. Measured for the gateway: it exits 6 s after the signal, within Docker's default 10 s.
+
+Settings come from environment variables, as outside Docker (see the table in Getting started), for example:
+
+```
+docker run -p 8761:8761 vanmool/service-discovery
+```
 
 ## Service discovery (Eureka)
 

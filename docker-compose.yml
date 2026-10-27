@@ -9,6 +9,10 @@ x-service: &service
   profiles: ["app"]
   # Started again if it stops, unless stopped on purpose (docker compose stop)
   restart: unless-stopped
+  # Time between the stop signal and a forced kill. A service needs about 6 s to finish its requests and leave
+  # Eureka; killed before that, it stays in the registry until its lease expires and callers keep picking it.
+  # Set explicitly: Docker Desktop 29.3 killed containers 1.5-2 s after docker stop by default
+  stop_grace_period: 30s
 
 # Each service reads only the variables it uses
 x-service-env: &service-env

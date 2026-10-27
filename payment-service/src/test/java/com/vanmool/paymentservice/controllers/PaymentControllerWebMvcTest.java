@@ -20,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -148,6 +149,18 @@ class PaymentControllerWebMvcTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.id").value(PAYMENT_ID.toString()))
                 .andExpect(jsonPath("$.history[0].source").value("API"));
+    }
+
+    @Test
+    void databaseUnreachable_returns503() throws Exception {
+        // Arrange: what Spring Data reports when the pool gives no connection in time
+        when(paymentService.getPayment(USER_ID, PAYMENT_ID)).thenThrow(new DataAccessResourceFailureException(
+                "Unable to acquire JDBC Connection [HikariPool-1 - Connection is not available, request timed out after 2000ms]"));
+
+        mockMvc.perform(get("/payments/{id}", PAYMENT_ID).with(customer()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("SERVICE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.message").value("The service is not available right now; please try again shortly"));
     }
 
     @Nested

@@ -38,6 +38,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -262,6 +263,19 @@ class OrderControllerWebMvcTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error").value("ORDER_NOT_FOUND"))
                     .andExpect(jsonPath("$.message").value("Order with id " + ORDER_ID + " not found"));
+        }
+
+        @Test
+        void databaseUnreachable_returns503() throws Exception {
+            // Arrange: no connection within the pool's timeout, so the read's transaction cannot start
+            when(orderService.getOrder(USER_ID, ORDER_ID)).thenThrow(new CannotCreateTransactionException(
+                    "Could not open JPA EntityManager for transaction: HikariPool-1 - Connection is not available"));
+
+            // Act & Assert
+            mockMvc.perform(get("/orders/{id}", ORDER_ID).with(customerToken()))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.error").value("SERVICE_UNAVAILABLE"))
+                    .andExpect(jsonPath("$.message").value("The service is not available right now; please try again shortly"));
         }
 
         @Test

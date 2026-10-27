@@ -315,9 +315,9 @@ Measured on a laptop (8 CPUs, Docker Desktop on Windows), 2026-10-27:
 | Memory under that load | 172–454 MB per service, 2.6 GB for the eight; with Kafka, MySQL, Redis and Mailpit 3.9 GB. No container killed or restarted |
 | user-auth-service restarted | the customer's token still works afterwards; logins unavailable for 26 s (8 s to start, the rest until the gateway sees the new instance) |
 | Kafka stopped while an order is placed | the order is placed; its email goes out once Kafka is back (12.8 s after starting it) |
-| MySQL stopped | the database services answer 500 after 30 s (through the gateway: 504 after 10 s) until they are marked down (about 34 s), then 503 at once; all work again 31 s after MySQL is back, without a restart |
+| MySQL stopped | the database services answer 503 `SERVICE_UNAVAILABLE` after 2 s; once they are marked down (about 20 s), the gateway answers 503 at once; all work again 26 s after MySQL is back, without a restart. Before a 2 s connection timeout was set: 500 after 30 s, 504 through the gateway |
 
-Known limits, to be improved: while the database is unreachable, a request waits 30 s for a connection before failing (a short timeout and a 503 would be better); and about one request in 15,000 failed at the gateway because product-service closed a pooled connection just as it was being reused.
+Known limit, to be improved: about one request in 15,000 failed at the gateway because product-service closed a pooled connection just as it was being reused.
 
 ## Service discovery (Eureka)
 
@@ -494,6 +494,7 @@ Every error, including the ones Spring itself raises (unknown path, wrong method
 | `INSUFFICIENT_STOCK` | 409 | A reservation or a stock removal needs more units than there are |
 | `RESERVATION_CONFLICT` | 409 | The order already has a reservation with other items, or it was released |
 | `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, ... | 404, 405, 415, ... | Errors raised by Spring before a controller runs; the code is the HTTP status name |
+| `SERVICE_UNAVAILABLE` | 503 | The service's database cannot be reached (no connection within 2 s). Temporary: try again. The user-auth, order and payment services answer the same way |
 | `INTERNAL_ERROR` | 500 | An unexpected server error. The details are logged on the server, never sent to the client |
 
 ### Stock

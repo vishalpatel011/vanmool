@@ -20,6 +20,7 @@ import com.vanmool.userauthservice.security.models.CustomUserDetails;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -102,6 +103,10 @@ public class UserServiceImpl implements UserService {
         try {
             user = (CustomUserDetails) authenticationManager.authenticate(
                     UsernamePasswordAuthenticationToken.unauthenticated(normalizeEmail(email), password)).getPrincipal();
+        } catch (InternalAuthenticationServiceException e) {
+            // Not a wrong password: the user could not be looked up, for example because the database failed. Passed
+            // on as that failure (503 when the database is unreachable), never turned into "invalid credentials"
+            throw e.getCause() instanceof RuntimeException cause ? cause : e;
         } catch (AuthenticationException e) {
             throw new InvalidCredentialsException();
         }

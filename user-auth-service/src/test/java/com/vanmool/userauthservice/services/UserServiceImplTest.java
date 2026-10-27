@@ -3,6 +3,8 @@ package com.vanmool.userauthservice.services;
 import com.vanmool.userauthservice.events.OutboxWriter;
 import com.vanmool.userauthservice.events.PasswordChangedEvent;
 import com.vanmool.userauthservice.events.UserRegisteredEvent;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
@@ -289,6 +291,19 @@ class UserServiceImplTest {
 
             // Act & Assert
             assertThrows(InvalidCredentialsException.class, () -> userService.login("asha@example.com", "wrong password"));
+            verifyNoInteractions(tokenRepository);
+        }
+
+        @Test
+        void userLookupFailing_isPassedOn_notReportedAsWrongCredentials() {
+            // Arrange: Spring Security wraps a failure of the user lookup (here: the database is down)
+            DataAccessResourceFailureException databaseDown = new DataAccessResourceFailureException("Unable to acquire JDBC Connection");
+            when(authenticationManager.authenticate(any()))
+                    .thenThrow(new InternalAuthenticationServiceException(databaseDown.getMessage(), databaseDown));
+
+            // Act & Assert: the database failure itself, which the API answers with 503, not 401
+            assertSame(databaseDown, assertThrows(DataAccessResourceFailureException.class,
+                    () -> userService.login("asha@example.com", "correct horse battery")));
             verifyNoInteractions(tokenRepository);
         }
     }

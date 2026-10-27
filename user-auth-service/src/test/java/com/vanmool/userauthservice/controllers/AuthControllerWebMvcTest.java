@@ -31,6 +31,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.stream.Stream;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
@@ -275,6 +276,21 @@ class AuthControllerWebMvcTest {
                     .andExpect(status().isInternalServerError())
                     .andExpect(jsonPath("$.error").value("INTERNAL_ERROR"))
                     .andExpect(content().string(not(containsString("db-host"))));
+        }
+
+        @Test
+        void databaseUnreachable_returns503WithoutInternalDetails() throws Exception {
+            // Arrange: no connection within the pool's timeout, so the login's transaction cannot start
+            when(userService.login(anyString(), anyString())).thenThrow(new CannotCreateTransactionException(
+                    "Could not open JPA EntityManager for transaction: HikariPool-1 - Connection is not available"));
+
+            // Act & Assert: temporary, so the client may try again
+            mockMvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON).content("""
+                            { "email": "asha@example.com", "password": "correct horse battery" }"""))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.error").value("SERVICE_UNAVAILABLE"))
+                    .andExpect(jsonPath("$.message").value("The service is not available right now; please try again shortly"))
+                    .andExpect(content().string(not(containsString("Hikari"))));
         }
     }
 

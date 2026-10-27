@@ -26,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -587,6 +588,21 @@ class ProductControllerWebMvcTest {
                     .andExpect(jsonPath("$.error").value("INTERNAL_ERROR"))
                     .andExpect(jsonPath("$.message").value("Something went wrong on our side"))
                     .andExpect(content().string(not(containsString("db-host"))));
+        }
+
+        @Test
+        void databaseUnreachable_returns503WithoutInternalDetails() throws Exception {
+            // Arrange: what Spring Data reports when the pool gives no connection in time
+            when(productService.searchProducts(any(ProductSearchCriteria.class), any(Pageable.class)))
+                    .thenThrow(new DataAccessResourceFailureException(
+                            "Unable to acquire JDBC Connection [HikariPool-1 - Connection is not available, request timed out after 2000ms]"));
+
+            // Act & Assert: temporary, so the client may try again
+            mockMvc.perform(get("/products"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.error").value("SERVICE_UNAVAILABLE"))
+                    .andExpect(jsonPath("$.message").value("The service is not available right now; please try again shortly"))
+                    .andExpect(content().string(not(containsString("Hikari"))));
         }
     }
 }

@@ -6,10 +6,12 @@ import com.vanmool.paymentservice.gateways.GatewayUnavailableException;
 import com.vanmool.paymentservice.gateways.InvalidSignatureException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.ErrorResponse;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -88,6 +90,15 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorDto> handleUnreadableBody(HttpServletRequest request) {
         return buildError(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST",
                 "Request body is missing or is not valid JSON for this request", request);
+    }
+
+    // The database is unreachable, or gave no connection within spring.datasource.hikari.connection-timeout. That is
+    // temporary, so 503 rather than 500: the client may try again. Nothing about the database goes to the client
+    @ExceptionHandler({CannotCreateTransactionException.class, DataAccessResourceFailureException.class})
+    public ResponseEntity<ErrorDto> handleDatabaseUnavailable(Exception e, HttpServletRequest request) {
+        log.error("Database unavailable on {} {}: {}", request.getMethod(), request.getRequestURI(), e.getMessage());
+        return buildError(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE",
+                "The service is not available right now; please try again shortly", request);
     }
 
     @ExceptionHandler(Exception.class)

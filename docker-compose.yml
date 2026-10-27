@@ -38,6 +38,9 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       # Topics are declared by the services that own them, never created by a typo in a topic name
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Topics and events are kept in the kafka-data volume, so they survive a new container. Without this setting
+      # Kafka writes to /tmp/kafka-logs inside the container, which is lost when the container is recreated
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:

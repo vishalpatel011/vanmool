@@ -285,12 +285,12 @@ docker compose --profile app up -d --build
 
 This builds the eight images and starts them with MySQL, Redis, Kafka and Mailpit. Stop the services started from IntelliJ first: the stack uses the same ports for the gateway and the registry.
 
-- **One address for clients:** the API gateway at `http://localhost:8000`. The Eureka dashboard (`http://localhost:8761`) and Mailpit (`http://localhost:8025`) are also published; the services' own ports are not, so every request goes through the gateway. All of them listen on this machine only (`127.0.0.1`).
+- **One address for clients:** the API gateway at `http://127.0.0.1:8000`. The Eureka dashboard (`http://127.0.0.1:8761`) and Mailpit (`http://127.0.0.1:8025`) are also published; the services' own ports are not, so every request goes through the gateway. All of them listen on this machine's IPv4 loopback only, so use `127.0.0.1`: a client that tries `localhost`'s IPv6 address first waits for it to fail (measured on Windows: 2 s per connection from Python, 0.2 s from curl).
 - **Names, not addresses:** inside the Compose network the services reach `mysql:3306`, `redis:6379`, `kafka:29092`, `mailpit:1025` and `service-discovery:8761` by name, and each other through Eureka, which hands out the containers' addresses.
 - **Start order:** a service starts once what it needs is healthy (MySQL, Kafka, Redis, the registry). Every HTTP service has a health check on its Actuator health; on the first start here all eleven checked containers were healthy 48 s after `up`.
 - **Restarts:** a service that stops is started again (`restart: unless-stopped`), unless it was stopped on purpose.
 - **Stopping:** each service gets 30 s between the stop signal and a forced kill (`stop_grace_period`). It needs about 4–6 s to finish its requests and leave Eureka. Docker Desktop 29.3 killed containers 1.5–2 s after `docker stop` by default; a service killed before leaving Eureka stays in the registry until its lease expires (about 40 s), and callers keep picking it.
-- **Public address:** `PUBLIC_URL` (default `http://localhost:8000`) is the tokens' issuer and the base of the links the services hand out, such as the payment pages, because clients reach everything through the gateway.
+- **Public address:** `PUBLIC_URL` (default `http://127.0.0.1:8000`) is the tokens' issuer and the base of the links the services hand out, such as the payment pages, because clients reach everything through the gateway.
 - **Signing key:** with `JWT_PRIVATE_KEY` set, sessions survive a restart of the user-auth service; without it, a new key is made at every start. Generate one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` and put the lines between the `BEGIN` and `END` markers on one line.
 - **Payments:** `PAYMENT_FAKE_GATEWAY_ENABLED=true` turns on the fake gateway to try payments without a Razorpay or Stripe account; its webhook comes in through the gateway, like a real one's.
 

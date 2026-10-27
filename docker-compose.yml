@@ -20,8 +20,9 @@ x-service-env: &service-env
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
   REDIS_HOST: redis
   # Clients reach everything through the API gateway, so its address is the tokens' issuer and the base of the links
-  # the services hand out (password reset, payment pages)
-  AUTH_ISSUER: ${PUBLIC_URL:-http://localhost:8000}
+  # the services hand out (password reset, payment pages). 127.0.0.1 rather than localhost: the ports are published on
+  # IPv4 only, and a client that tries localhost's IPv6 address first waits for it to fail (2 s on Windows)
+  AUTH_ISSUER: ${PUBLIC_URL:-http://127.0.0.1:8000}
 
 # A service is healthy when its Actuator health is UP. start_period: the first start of all the services at once
 # takes a while, failures then do not count
@@ -205,7 +206,7 @@ services:
       DB_USERNAME: PaymentService_user
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:-}
       # The customer's browser is sent to the payment pages through the API gateway
-      PAYMENT_PUBLIC_BASE_URL: ${PUBLIC_URL:-http://localhost:8000}
+      PAYMENT_PUBLIC_BASE_URL: ${PUBLIC_URL:-http://127.0.0.1:8000}
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
       RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}

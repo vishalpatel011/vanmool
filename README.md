@@ -315,7 +315,7 @@ Measured on a laptop (8 CPUs, Docker Desktop on Windows), 2026-10-27:
 | Memory under that load | 172–454 MB per service, 2.6 GB for the eight; with Kafka, MySQL, Redis and Mailpit 3.9 GB. No container killed or restarted |
 | user-auth-service restarted | the customer's token still works afterwards; logins unavailable for 26 s (8 s to start, the rest until the gateway sees the new instance) |
 | Kafka stopped while an order is placed | the order is placed; its email goes out once Kafka is back (12.8 s after starting it) |
-| MySQL stopped | the database services answer 503 `SERVICE_UNAVAILABLE` after 2 s; once they are marked down (about 20 s), the gateway answers 503 at once; all work again 26 s after MySQL is back, without a restart. Before a 2 s connection timeout was set: 500 after 30 s, 504 through the gateway |
+| MySQL stopped | the database services answer 503 `SERVICE_UNAVAILABLE` after 2 s; once they are marked down (about 20 s), the gateway answers 503 at once; all work again 26 s after MySQL is back, without a restart. An `OrderCancelled` event that arrived during a 70 s outage was handled once MySQL was back (units released); before, it went to the dead-letter topic. Before a 2 s connection timeout was set: 500 after 30 s, 504 through the gateway |
 
 Known limit, to be improved: about one request in 15,000 failed at the gateway because product-service closed a pooled connection just as it was being reused.
 
@@ -852,7 +852,7 @@ Every event is one JSON object with `eventId`, `eventType` and `occurredAt` firs
 
 Delivery is therefore *at least once*: an event can arrive twice (for example if the service stops right after Kafka accepted it), so every consumer must handle a repeat safely (releasing stock twice releases it once; the notification service remembers the `eventId`s it has handled). Events with the same key go to the same partition and are read in order: an order's `OrderCancelled` is never read before its `OrderPlaced`.
 
-**When a consumer fails.** Each consumer is a consumer group of its own (`product-service`, `notification-service`), so each reads every event. If handling an event fails, it is tried again every 2 seconds, 10 times, while later events of that partition wait. If it still fails, or if the message can never work (not JSON, missing fields; these are not retried), it is published to the consumer's own dead-letter topic, for example `order-events.product-service.DLT`, with the error in its headers, and the consumer carries on. Nothing is lost: dead-letter messages can be read and replayed once the cause is fixed.
+**When a consumer fails.** Each consumer is a consumer group of its own (`product-service`, `notification-service`), so each reads every event. If handling an event fails because the service's database is unreachable, it is tried again every 5 seconds until the database is back: no other instance could handle it either, and on a dead-letter topic it would wait for someone to replay it. Any other failure is tried again every 2 seconds, 10 times. Meanwhile later events of that partition wait. If it still fails, or if the message can never work (not JSON, missing fields; these are not retried), it is published to the consumer's own dead-letter topic, for example `order-events.product-service.DLT`, with the error in its headers, and the consumer carries on. Nothing is lost: dead-letter messages can be read and replayed once the cause is fixed.
 
 ```
 MSYS_NO_PATHCONV=1 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \

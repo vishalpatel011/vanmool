@@ -6,6 +6,7 @@ import com.vanmool.productservice.dtos.ReservationItemRequestDto;
 import com.vanmool.productservice.exceptions.ProductNotFoundException;
 import com.vanmool.productservice.services.ProductService;
 import com.vanmool.productservice.services.StockService;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -15,7 +16,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import java.math.BigDecimal;
@@ -37,6 +41,17 @@ class OrderEventsIT {
     private final String category = "it-events-" + UUID.randomUUID();
     private final UUID orderId = UUID.randomUUID();
     private UUID basketId;
+
+    // order-service owns order-events and creates it when it starts. On a Kafka that has not seen order-service yet
+    // (a new machine, or after docker compose down -v) the test declares it too, with the same settings, so that it
+    // exists before the listener subscribes and before the test sends to it
+    @TestConfiguration
+    static class OrderServiceTopic {
+        @Bean
+        NewTopic orderEventsTopic() {
+            return TopicBuilder.name("order-events").partitions(3).replicas(1).build();
+        }
+    }
 
     @Autowired
     private ProductService productService;

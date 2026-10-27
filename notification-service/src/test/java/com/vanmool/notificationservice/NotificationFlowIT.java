@@ -1,11 +1,15 @@
 package com.vanmool.notificationservice;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.client.RestClient;
 
@@ -27,6 +31,22 @@ class NotificationFlowIT {
     private final String address = "notification-it-" + UUID.randomUUID() + "@example.com";
     private final List<UUID> eventIds = new ArrayList<>();
     private final RestClient mailpit = RestClient.create("http://localhost:8025/api/v1");
+
+    // user-auth-service and order-service own the topics this test sends to, and create them when they start. On a
+    // Kafka that has not seen them yet (a new machine, or after docker compose down -v) the test declares them too,
+    // with the same settings, so that they exist before the listeners subscribe and before the test sends
+    @TestConfiguration
+    static class SourceTopics {
+        @Bean
+        NewTopic userEventsTopic() {
+            return TopicBuilder.name("user-events").partitions(3).replicas(1).build();
+        }
+
+        @Bean
+        NewTopic orderEventsTopic() {
+            return TopicBuilder.name("order-events").partitions(3).replicas(1).build();
+        }
+    }
 
     @Autowired
     private KafkaTemplate<String, String> kafkaTemplate;

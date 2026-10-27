@@ -2,10 +2,14 @@ package com.vanmool.apigateway;
 
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -53,6 +57,53 @@ final class ServiceStub {
 
     void stop() {
         server.stop(0);
+    }
+
+    // An instance that reads each request and closes the connection without answering, as a service does when it
+    // closes a kept-alive connection just as the gateway sends a request on it
+    static final class ClosesWithoutAnswering {
+        private final ServerSocket socket;
+        final AtomicInteger calls = new AtomicInteger();
+
+        ClosesWithoutAnswering() {
+            try {
+                socket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            Thread thread = new Thread(this::serve, "closes-without-answering");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        private void serve() {
+            while (!socket.isClosed()) {
+                try (Socket connection = socket.accept()) {
+                    BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(connection.getInputStream(), StandardCharsets.ISO_8859_1));
+                    // The request line and the headers, up to the empty line; then the connection is closed
+                    String line;
+                    do {
+                        line = reader.readLine();
+                    } while (line != null && !line.isEmpty());
+                    calls.incrementAndGet();
+                } catch (IOException e) {
+                    // stop() closed the socket, or the gateway gave up on the connection
+                }
+            }
+        }
+
+        String uri() {
+            return "http://127.0.0.1:" + socket.getLocalPort();
+        }
+
+        void stop() {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
     }
 
     // The address of a port that was free a moment ago: connecting to it is refused, as to a crashed instance

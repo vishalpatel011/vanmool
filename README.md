@@ -311,13 +311,11 @@ Measured on a laptop (8 CPUs, Docker Desktop on Windows), 2026-10-27:
 |---|---|
 | `up` until every checked container is healthy | 48 s (first start, no memory limits); 68–74 s with the limits |
 | A purchase through the gateway: cart, order, fake payment, webhook, Kafka | order `CONFIRMED` 0.6 s after paying; order, payment and welcome emails in Mailpit |
-| 10 clients for 60 s (catalog, product, stock, cart) | 32,775 requests (546 a second), median 13–19 ms, p95 29–44 ms; 2 failed (below) |
+| 10 clients for 60 s (catalog, product, stock, cart) | 32,775 requests (546 a second), median 13–19 ms, p95 29–44 ms; 2 failed, on connections the services closed as the gateway reused them. With the gateway retrying such reads: two runs, 61,233 requests, none failed |
 | Memory under that load | 172–454 MB per service, 2.6 GB for the eight; with Kafka, MySQL, Redis and Mailpit 3.9 GB. No container killed or restarted |
 | user-auth-service restarted | the customer's token still works afterwards; logins unavailable for 26 s (8 s to start, the rest until the gateway sees the new instance) |
 | Kafka stopped while an order is placed | the order is placed; its email goes out once Kafka is back (12.8 s after starting it) |
 | MySQL stopped | the database services answer 503 `SERVICE_UNAVAILABLE` after 2 s; once they are marked down (about 20 s), the gateway answers 503 at once; all work again 26 s after MySQL is back, without a restart. An `OrderCancelled` event that arrived during a 70 s outage was handled once MySQL was back (units released); before, it went to the dead-letter topic. Before a 2 s connection timeout was set: 500 after 30 s, 504 through the gateway |
-
-Known limit, to be improved: about one request in 15,000 failed at the gateway because product-service closed a pooled connection just as it was being reused.
 
 ## Service discovery (Eureka)
 
@@ -353,11 +351,13 @@ Clients use one address, `http://localhost:8000` (Spring Cloud Gateway on WebFlu
 - **Request ids.** Every request gets an `X-Request-Id`: the client's own if it sent a plain one (letters, digits, hyphens, at most 64), otherwise a new UUID. The service receives it, and the client gets it back in the response, also on errors. The gateway logs one line per request, for example `GET /cart -> cart-service 200 in 23 ms [5c3e...]`. The path is logged without its query, because a query can hold a secret such as a password reset token.
 - **Errors in the services' format.** When the gateway answers itself, the body has the same fields as the services' errors (`timestamp`, `status`, `error`, `message`, `path`):
   - `404 NOT_FOUND`: no API at this path.
+  - `502 BAD_GATEWAY`: the service closed the connection without answering (after the retry below, for a `GET`).
   - `503 SERVICE_UNAVAILABLE`: the service has no instance up, or the instance cannot be reached.
   - `504 GATEWAY_TIMEOUT`: no answer within 10 seconds.
 
   The messages carry no host names or exception texts.
-- **Retries.** A `GET` whose instance cannot be reached is tried once more on the next instance, as the services do among themselves. A service's own error answer is passed on as it is.
+- **Retries.** A `GET` that got no answer is tried once more on the next instance: its instance could not be reached, or the connection was closed before the answer. A `GET` changes nothing, so sending it again is safe; other methods are not retried. A service's own error answer is passed on as it is.
+- **Connections to the services** are kept open and reused, and closed by the gateway after 15 s without use, before the services' Tomcat closes them (after 60 s). A connection picked just as the service closes it would otherwise fail before any answer.
 - **Rate limits on signing in.** `POST /auth/login`, `/auth/signup`, `/auth/password-reset` and `/auth/password-reset/confirm` together accept at most 10 requests a minute from one client address. Over the limit, the answer is `429 Too Many Requests` and the request never reaches the user-auth service. This slows down password guessing and stops a stranger from flooding someone's mailbox with reset links (the user-auth service also sends at most 3 links per account per hour). The response headers show the remaining budget (`X-RateLimit-Remaining`, in tokens of 6 per request). Other requests, including the page a reset link opens, are not limited.
   - The counters live in Redis (a token bucket, Spring Cloud Gateway's `RedisRateLimiter`), so several gateway instances share them.
   - If Redis is down, requests are let through rather than refused, and the gateway stays healthy.

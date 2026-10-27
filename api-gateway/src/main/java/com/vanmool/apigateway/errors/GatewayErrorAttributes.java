@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.netty.http.client.PrematureCloseException;
 
 import java.net.ConnectException;
 import java.time.Instant;
@@ -16,6 +17,7 @@ import java.util.Map;
 
 // The gateway's own error answers, in the same JSON as the services' (timestamp, status, error, message, path):
 //   404 NOT_FOUND            no route for the path (also the internal endpoints, which are not routed)
+//   502 BAD_GATEWAY          the service closed the connection without answering (a GET is tried again first)
 //   503 SERVICE_UNAVAILABLE  the service has no instance up, or the one picked cannot be reached
 //   504 GATEWAY_TIMEOUT      the service did not answer within 10 s
 // The messages say what happened without internal details (host names, ports, exception texts).
@@ -29,6 +31,8 @@ public class GatewayErrorAttributes extends DefaultErrorAttributes {
         HttpStatus status = statusOf(error);
         if (status == HttpStatus.INTERNAL_SERVER_ERROR) {
             log.error("Unexpected error on {} {}", request.method(), request.path(), error);
+        } else if (status == HttpStatus.BAD_GATEWAY) {
+            log.warn("The service closed the connection without answering {} {}", request.method(), request.path());
         }
         Map<String, Object> attributes = new LinkedHashMap<>();
         attributes.put("timestamp", Instant.now());
@@ -44,6 +48,9 @@ public class GatewayErrorAttributes extends DefaultErrorAttributes {
             if (cause instanceof ConnectException) {
                 return HttpStatus.SERVICE_UNAVAILABLE;
             }
+            if (cause instanceof PrematureCloseException) {
+                return HttpStatus.BAD_GATEWAY;
+            }
         }
         if (error instanceof ResponseStatusException responseStatus) {
             HttpStatus status = HttpStatus.resolve(responseStatus.getStatusCode().value());
@@ -55,6 +62,7 @@ public class GatewayErrorAttributes extends DefaultErrorAttributes {
     private static String messageFor(HttpStatus status) {
         return switch (status) {
             case NOT_FOUND -> "There is no API at this path";
+            case BAD_GATEWAY -> "The service for this request closed the connection without answering";
             case SERVICE_UNAVAILABLE -> "The service for this request is not available right now";
             case GATEWAY_TIMEOUT -> "The service for this request did not answer in time";
             case INTERNAL_SERVER_ERROR -> "Something went wrong on our side";

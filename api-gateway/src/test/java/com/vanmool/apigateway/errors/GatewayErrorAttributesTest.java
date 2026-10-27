@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.support.NotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.netty.http.client.PrematureCloseException;
 
 import java.net.ConnectException;
 
@@ -20,6 +21,13 @@ class GatewayErrorAttributesTest {
         // A refused connection, however deep it is wrapped
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, GatewayErrorAttributes.statusOf(
                 new RuntimeException(new IllegalStateException(new ConnectException("Connection refused")))));
+    }
+
+    @Test
+    void aConnectionClosedByTheServiceWithoutAnAnswer_is502() {
+        assertEquals(HttpStatus.BAD_GATEWAY, GatewayErrorAttributes.statusOf(PrematureCloseException.TEST_EXCEPTION));
+        assertEquals(HttpStatus.BAD_GATEWAY, GatewayErrorAttributes.statusOf(
+                new RuntimeException(PrematureCloseException.TEST_EXCEPTION)));
     }
 
     @Test

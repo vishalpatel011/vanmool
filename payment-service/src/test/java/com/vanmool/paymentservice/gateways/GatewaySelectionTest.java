@@ -19,7 +19,8 @@ class GatewaySelectionTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final RazorpayGateway razorpay = new RazorpayGateway("rzp_test_key", "secret", "whsec", "http://localhost:8085", objectMapper);
     private final StripeGateway stripe = new StripeGateway("sk_test_key", "whsec", "http://localhost:8085");
-    private final FakeGateway fake = new FakeGateway(true, "fake-secret", "http://localhost:8085", objectMapper);
+    private final FakeGateway fake = new FakeGateway(true, "fake-secret", "http://localhost:8085",
+            "http://localhost:8085/payments/webhooks/fake", objectMapper);
     private final StripeGateway stripeWithoutKey = new StripeGateway("", "", "http://localhost:8085");
 
     private static List<GatewayName> names(List<PaymentGateway> gateways) {

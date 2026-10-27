@@ -31,15 +31,18 @@ public class FakeGateway implements PaymentGateway {
     private final boolean enabled;
     private final String webhookSecret;
     private final String publicBaseUrl;
+    private final String webhookUrl;
     private final ObjectMapper objectMapper;
     private final Map<String, Checkout> checkouts = new ConcurrentHashMap<>();
 
     public FakeGateway(@Value("${payment.fake.enabled}") boolean enabled,
                        @Value("${payment.fake.webhook-secret}") String webhookSecret,
-                       @Value("${payment.public-base-url}") String publicBaseUrl, ObjectMapper objectMapper) {
+                       @Value("${payment.public-base-url}") String publicBaseUrl,
+                       @Value("${payment.fake.webhook-url}") String webhookUrl, ObjectMapper objectMapper) {
         this.enabled = enabled;
         this.webhookSecret = webhookSecret;
         this.publicBaseUrl = publicBaseUrl;
+        this.webhookUrl = webhookUrl;
         this.objectMapper = objectMapper;
         if (enabled) {
             log.warn("The FAKE payment gateway is enabled: payments can be marked paid without money. Development only");
@@ -86,7 +89,7 @@ public class FakeGateway implements PaymentGateway {
     }
 
     // The customer pays (or the payment fails) on the fake checkout page: record it, then send the signed webhook
-    // to this service's own webhook endpoint, as a real gateway would
+    // to this service's webhook endpoint, as a real gateway would
     public Optional<UUID> complete(String reference, boolean success) {
         Checkout checkout = checkouts.get(reference);
         // Like a real gateway, a link that was closed or already finished cannot be paid
@@ -104,7 +107,7 @@ public class FakeGateway implements PaymentGateway {
                 .put("gatewayPaymentId", gatewayPaymentId)
                 .put("amount", checkout.amountInMinorUnits())
                 .toString();
-        RestClient.create(publicBaseUrl).post().uri("/payments/webhooks/fake")
+        RestClient.create().post().uri(webhookUrl)
                 .contentType(MediaType.APPLICATION_JSON)
                 .header(SIGNATURE_HEADER, HmacSha256.hex(webhookSecret, payload))
                 .body(payload)

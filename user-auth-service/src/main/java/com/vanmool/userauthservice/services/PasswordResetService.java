@@ -9,7 +9,6 @@ import com.vanmool.userauthservice.exceptions.UserNotFoundException;
 import com.vanmool.userauthservice.models.PasswordResetToken;
 import com.vanmool.userauthservice.models.User;
 import com.vanmool.userauthservice.repositories.PasswordResetTokenRepository;
-import com.vanmool.userauthservice.repositories.TokenRepository;
 import com.vanmool.userauthservice.repositories.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -45,7 +44,7 @@ public class PasswordResetService {
 
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository resetTokenRepository;
-    private final TokenRepository tokenRepository;
+    private final SessionRevoker sessionRevoker;
     private final PasswordEncoder passwordEncoder;
     private final OutboxWriter outboxWriter;
     private final TransactionTemplate transactionTemplate;
@@ -54,13 +53,13 @@ public class PasswordResetService {
     private final String linkPrefix;
 
     public PasswordResetService(UserRepository userRepository, PasswordResetTokenRepository resetTokenRepository,
-                                TokenRepository tokenRepository, PasswordEncoder passwordEncoder,
+                                SessionRevoker sessionRevoker, PasswordEncoder passwordEncoder,
                                 OutboxWriter outboxWriter, TransactionTemplate transactionTemplate, Clock clock,
                                 @Value("${auth.password-reset.validity}") Duration linkValidity,
                                 @Value("${auth.password-reset.link}") String linkPrefix) {
         this.userRepository = userRepository;
         this.resetTokenRepository = resetTokenRepository;
-        this.tokenRepository = tokenRepository;
+        this.sessionRevoker = sessionRevoker;
         this.passwordEncoder = passwordEncoder;
         this.outboxWriter = outboxWriter;
         this.transactionTemplate = transactionTemplate;
@@ -112,7 +111,7 @@ public class PasswordResetService {
             managed.setPasswordHash(newHash);
             resetTokenRepository.closeOpenLinks(user.getId(), now);
             // Whoever had the old password may be signed in somewhere: every session ends
-            tokenRepository.revokeOtherTokens(user.getId(), null, now);
+            sessionRevoker.revokeOtherSessions(user.getId(), null);
             outboxWriter.add(KafkaConfig.USER_EVENTS_TOPIC, user.getId().toString(),
                     PasswordChangedEvent.of(user.getId(), managed.getName(), managed.getEmail(), now));
         });

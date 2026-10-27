@@ -1,6 +1,5 @@
 package com.vanmool.userauthservice;
 
-import com.vanmool.userauthservice.repositories.TokenRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,9 +11,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.support.TransactionTemplate;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -37,15 +34,12 @@ class AuthFlowIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    @Autowired
-    private TokenRepository tokenRepository;
-
-    @Autowired
-    private TransactionTemplate transactionTemplate;
 
     @AfterEach
     void removeTheTestUser() {
         jdbcTemplate.update("DELETE FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.email') = ?", email);
+        // TokenRevoked events name the user by id only
+        jdbcTemplate.update("DELETE o FROM outbox_event o JOIN users u ON JSON_UNQUOTE(o.payload->'$.userId') = BIN_TO_UUID(u.id) WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE t FROM token t JOIN users u ON u.id = t.user_id WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE r FROM user_role r JOIN users u ON u.id = r.user_id WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE FROM users WHERE email = ?", email);
@@ -97,6 +91,9 @@ class AuthFlowIT {
 
         // Logging out again is not an error
         assertEquals(HttpStatus.NO_CONTENT, callWithToken(HttpMethod.POST, "/auth/logout", token).getStatusCode());
+
+        // The logout was announced once, with the token's id (its jti), for the API gateway to refuse it too
+        assertEquals(List.of(jtiOf(token)), revokedTokenIds());
     }
 
     @Test
@@ -120,6 +117,20 @@ class AuthFlowIT {
         ResponseEntity<Map> asAdmin = callWithToken(HttpMethod.PUT, "/users/" + userId + "/roles/SELLER", adminToken);
         assertEquals(HttpStatus.OK, asAdmin.getStatusCode());
         assertEquals(List.of("CUSTOMER", "SELLER", "ADMIN"), asAdmin.getBody().get("roles"));
+    }
+
+    // The tokenId of every TokenRevoked event of the test user, in order
+    private List<String> revokedTokenIds() {
+        return jdbcTemplate.queryForList("""
+                SELECT JSON_UNQUOTE(o.payload->'$.tokenId') FROM outbox_event o
+                JOIN users u ON JSON_UNQUOTE(o.payload->'$.userId') = BIN_TO_UUID(u.id)
+                WHERE o.event_type = 'TokenRevoked' AND u.email = ? ORDER BY o.created_at""", String.class, email);
+    }
+
+    // The "jti" claim of a JWT, read from its payload
+    private static String jtiOf(String jwt) {
+        String payload = new String(java.util.Base64.getUrlDecoder().decode(jwt.split("\\.")[1]), java.nio.charset.StandardCharsets.UTF_8);
+        return payload.replaceAll(".*\"jti\":\"([^\"]+)\".*", "$1");
     }
 
     private String login() {
@@ -181,12 +192,8 @@ class AuthFlowIT {
         assertEquals(1, payloads.size());
         assertFalse(payloads.get(0).contains("tribal") || payloads.get(0).contains("$2a$"), payloads.get(0));
 
-        // A change made with a token that has no row here (from /oauth2/token) keeps no session: the query's
-        // "keep IS NULL" branch, against MySQL. Two are still active: the phone and the last login
-        UUID userId = UUID.fromString((String) renamed.getBody().get("id"));
-        Integer revoked = transactionTemplate.execute(status -> tokenRepository.revokeOtherTokens(userId, null, Instant.now()));
-        assertEquals(2, revoked);
-        assertEquals(HttpStatus.UNAUTHORIZED, callWithToken(HttpMethod.GET, "/users/me", phone).getStatusCode());
+        // Only the laptop's session was ended, and announced
+        assertEquals(List.of(jtiOf(laptop)), revokedTokenIds());
     }
 
     @Test

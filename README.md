@@ -738,6 +738,7 @@ Services tell each other what happened through Kafka, when the sender does not n
 | `user-events` | user-auth-service | `UserRegistered`: `userId`, `name`, `email` | user id | notification-service (welcome email) |
 | `user-events` | user-auth-service | `PasswordChanged`: `userId`, `name`, `email` (never a password or hash) | user id | notification-service (security notice) |
 | `user-events` | user-auth-service | `PasswordResetRequested`: `userId`, `name`, `email`, `resetLink` (holds the one-time token), `expiresAt` | user id | notification-service (reset email) |
+| `user-events` | user-auth-service | `TokenRevoked`: `userId`, `tokenId` (the JWT's `jti`), `expiresAt`, for a logout, the other sessions of a password change, and all sessions of a password reset | user id | api-gateway (refuses the token until it expires) |
 | `order-events` | order-service | `OrderPlaced`: `orderId`, `userId`, `customerEmail`, `items` (product, name, price, quantity), `totalAmount`, `shippingAddress` | order id | notification-service (order confirmation) |
 | `order-events` | order-service | `OrderCancelled`: `orderId`, `userId`, `customerEmail`, `totalAmount`, `reason` (`CUSTOMER` or `PAYMENT_TIMEOUT`) | order id | product-service (puts the stock back), payment-service (closes the open payment link), notification-service |
 | `order-events` | order-service | `OrderShipped`: `orderId`, `userId`, `customerEmail`, `carrier`, `trackingNumber` (may be null) | order id | notification-service |

@@ -40,6 +40,8 @@ class PasswordResetIT {
     @AfterEach
     void removeTheTestUser() {
         jdbcTemplate.update("DELETE FROM outbox_event WHERE JSON_UNQUOTE(payload->'$.email') = ?", email);
+        // TokenRevoked events name the user by id only
+        jdbcTemplate.update("DELETE o FROM outbox_event o JOIN users u ON JSON_UNQUOTE(o.payload->'$.userId') = BIN_TO_UUID(u.id) WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE p FROM password_reset_token p JOIN users u ON u.id = p.user_id WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE t FROM token t JOIN users u ON u.id = t.user_id WHERE u.email = ?", email);
         jdbcTemplate.update("DELETE r FROM user_role r JOIN users u ON u.id = r.user_id WHERE u.email = ?", email);
@@ -120,6 +122,11 @@ class PasswordResetIT {
         assertEquals("INVALID_RESET_LINK", again.getBody().get("error"));
         assertEquals(HttpStatus.BAD_REQUEST, confirm(tokens.get(1), "another new password").getStatusCode());
         assertEquals(HttpStatus.OK, login("tribal weave pattern").getStatusCode());
+
+        // Both sessions were announced as ended, for the API gateway to refuse them too
+        assertEquals(2, jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM outbox_event o JOIN users u ON JSON_UNQUOTE(o.payload->'$.userId') = BIN_TO_UUID(u.id)
+                WHERE o.event_type = 'TokenRevoked' AND u.email = ?""", Integer.class, email));
 
         // The security notice is on its way
         assertEquals(1, jdbcTemplate.queryForObject(

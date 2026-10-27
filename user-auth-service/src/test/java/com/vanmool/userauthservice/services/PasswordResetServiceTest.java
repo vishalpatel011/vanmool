@@ -8,7 +8,6 @@ import com.vanmool.userauthservice.models.PasswordResetToken;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.models.User;
 import com.vanmool.userauthservice.repositories.PasswordResetTokenRepository;
-import com.vanmool.userauthservice.repositories.TokenRepository;
 import com.vanmool.userauthservice.repositories.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -62,7 +61,7 @@ class PasswordResetServiceTest {
     private PasswordResetTokenRepository resetTokenRepository;
 
     @Mock
-    private TokenRepository tokenRepository;
+    private SessionRevoker sessionRevoker;
 
     @Mock
     private PasswordEncoder passwordEncoder;
@@ -74,7 +73,7 @@ class PasswordResetServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PasswordResetService(userRepository, resetTokenRepository, tokenRepository, passwordEncoder,
+        service = new PasswordResetService(userRepository, resetTokenRepository, sessionRevoker, passwordEncoder,
                 outboxWriter, new TransactionTemplate(mock(PlatformTransactionManager.class)),
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofMinutes(30), LINK);
     }
@@ -184,11 +183,11 @@ class PasswordResetServiceTest {
 
             // Assert: the link is used first (so a second request with it fails), then the rest
             assertEquals("$2a$12$newHash", managed.getPasswordHash());
-            InOrder steps = inOrder(passwordEncoder, resetTokenRepository, tokenRepository, outboxWriter);
+            InOrder steps = inOrder(passwordEncoder, resetTokenRepository, sessionRevoker, outboxWriter);
             steps.verify(passwordEncoder).encode("tribal weave pattern");
             steps.verify(resetTokenRepository).use(link.getId(), NOW);
             steps.verify(resetTokenRepository).closeOpenLinks(ASHA_ID, NOW);
-            steps.verify(tokenRepository).revokeOtherTokens(ASHA_ID, null, NOW);
+            steps.verify(sessionRevoker).revokeOtherSessions(ASHA_ID, null);
             steps.verify(outboxWriter).add(eq("user-events"), eq(ASHA_ID.toString()), event.capture());
             assertEquals("PasswordChanged", event.getValue().eventType());
             assertFalse(event.getValue().toString().contains("tribal"));
@@ -199,7 +198,7 @@ class PasswordResetServiceTest {
             when(resetTokenRepository.findWithUserByTokenHash(anyString())).thenReturn(Optional.empty());
 
             assertThrows(InvalidResetLinkException.class, () -> service.resetPassword("made-up", "tribal weave pattern"));
-            verifyNoInteractions(passwordEncoder, tokenRepository, outboxWriter);
+            verifyNoInteractions(passwordEncoder, sessionRevoker, outboxWriter);
         }
 
         @Test
@@ -232,7 +231,7 @@ class PasswordResetServiceTest {
             // Act & Assert
             assertThrows(InvalidResetLinkException.class, () -> service.resetPassword(TOKEN, "tribal weave pattern"));
             verify(userRepository, never()).findById(any());
-            verifyNoInteractions(tokenRepository, outboxWriter);
+            verifyNoInteractions(sessionRevoker, outboxWriter);
         }
     }
 

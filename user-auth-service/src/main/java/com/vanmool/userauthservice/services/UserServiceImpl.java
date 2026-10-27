@@ -44,11 +44,12 @@ public class UserServiceImpl implements UserService {
     private final Duration tokenValidity;
     private final OutboxWriter outboxWriter;
     private final TransactionTemplate transactionTemplate;
+    private final SessionRevoker sessionRevoker;
 
     public UserServiceImpl(UserRepository userRepository, TokenRepository tokenRepository, PasswordEncoder passwordEncoder,
                            AuthenticationManager authenticationManager, JwtService jwtService, Clock clock,
                            @Value("${auth.token-validity}") Duration tokenValidity, OutboxWriter outboxWriter,
-                           TransactionTemplate transactionTemplate) {
+                           TransactionTemplate transactionTemplate, SessionRevoker sessionRevoker) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -58,6 +59,7 @@ public class UserServiceImpl implements UserService {
         this.tokenValidity = tokenValidity;
         this.outboxWriter = outboxWriter;
         this.transactionTemplate = transactionTemplate;
+        this.sessionRevoker = sessionRevoker;
     }
 
     @Override
@@ -127,10 +129,8 @@ public class UserServiceImpl implements UserService {
         } catch (InvalidTokenException e) {
             return;
         }
-        tokenRepository.findById(tokenId).ifPresent(token -> {
-            token.setRevoked(true);
-            tokenRepository.save(token);
-        });
+        // The row and its TokenRevoked event together, so the API gateway refuses the token as well
+        transactionTemplate.executeWithoutResult(status -> tokenRepository.findById(tokenId).ifPresent(sessionRevoker::revoke));
     }
 
     @Override
@@ -187,7 +187,7 @@ public class UserServiceImpl implements UserService {
             User managed = userRepository.findById(userId).orElseThrow(() -> new UserNotFoundException(userId));
             managed.setPasswordHash(newHash);
             // Whoever may know the old password is signed out everywhere; the device making the change stays in
-            tokenRepository.revokeOtherTokens(userId, currentTokenId, clock.instant());
+            sessionRevoker.revokeOtherSessions(userId, currentTokenId);
             outboxWriter.add(KafkaConfig.USER_EVENTS_TOPIC, userId.toString(),
                     PasswordChangedEvent.of(userId, managed.getName(), managed.getEmail(), clock.instant()));
         });

@@ -85,6 +85,9 @@ class UserServiceImplTest {
     @Mock
     private OutboxWriter outboxWriter;
 
+    @Mock
+    private SessionRevoker sessionRevoker;
+
     // A real TransactionTemplate around a mocked transaction manager: the callback runs, no database is involved
     private final TransactionTemplate transactionTemplate = new TransactionTemplate(mock(PlatformTransactionManager.class));
 
@@ -96,7 +99,7 @@ class UserServiceImplTest {
         jwtService = new JwtService(new RSAKeyGenerator(2048).keyID("test-key").generate(), "http://localhost:8081",
                 Clock.fixed(NOW, ZoneOffset.UTC));
         userService = new UserServiceImpl(userRepository, tokenRepository, passwordEncoder, authenticationManager,
-                jwtService, Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY, outboxWriter, transactionTemplate);
+                jwtService, Clock.fixed(NOW, ZoneOffset.UTC), TOKEN_VALIDITY, outboxWriter, transactionTemplate, sessionRevoker);
     }
 
     private static User asha() {
@@ -293,7 +296,7 @@ class UserServiceImplTest {
     @Nested
     class Logout {
         @Test
-        void validJwt_revokesItsTokenRow() {
+        void validJwt_revokesItsTokenRow_throughTheSessionRevoker_whichAnnouncesIt() {
             // Arrange
             Token active = token(asha(), false);
             when(tokenRepository.findById(TOKEN_ID)).thenReturn(Optional.of(active));
@@ -302,8 +305,7 @@ class UserServiceImplTest {
             userService.logout(jwtFor(TOKEN_ID));
 
             // Assert
-            assertTrue(active.isRevoked());
-            verify(tokenRepository).save(active);
+            verify(sessionRevoker).revoke(active);
         }
 
         @Test
@@ -312,7 +314,7 @@ class UserServiceImplTest {
             userService.logout("not-a-jwt");
 
             // Assert
-            verifyNoInteractions(tokenRepository);
+            verifyNoInteractions(tokenRepository, sessionRevoker);
         }
     }
 
@@ -482,8 +484,8 @@ class UserServiceImplTest {
             // Assert: the hash on the entity of the transaction (saved by dirty checking), the other sessions ended
             // with the current one kept, then the event
             assertEquals("$2a$12$newHash", managedAsha.getPasswordHash());
-            InOrder steps = inOrder(tokenRepository, outboxWriter);
-            steps.verify(tokenRepository).revokeOtherTokens(ASHA_ID, TOKEN_ID, NOW);
+            InOrder steps = inOrder(sessionRevoker, outboxWriter);
+            steps.verify(sessionRevoker).revokeOtherSessions(ASHA_ID, TOKEN_ID);
             steps.verify(outboxWriter).add(eq("user-events"), eq(ASHA_ID.toString()), event.capture());
             assertEquals("PasswordChanged", event.getValue().eventType());
             assertEquals("asha@example.com", event.getValue().email());
@@ -504,7 +506,7 @@ class UserServiceImplTest {
             userService.changePassword(ASHA_ID, null, "correct horse battery", "tribal weave pattern");
 
             // Assert
-            verify(tokenRepository).revokeOtherTokens(ASHA_ID, null, NOW);
+            verify(sessionRevoker).revokeOtherSessions(ASHA_ID, null);
         }
 
         @Test
@@ -514,7 +516,7 @@ class UserServiceImplTest {
             assertThrows(IncorrectPasswordException.class,
                     () -> userService.changePassword(ASHA_ID, TOKEN_ID, "a guess", "tribal weave pattern"));
             verify(passwordEncoder, never()).encode(any());
-            verify(tokenRepository, never()).revokeOtherTokens(any(), any(), any());
+            verifyNoInteractions(sessionRevoker);
             verifyNoInteractions(outboxWriter);
         }
 

@@ -13,9 +13,14 @@ x-service: &service
   # Eureka; killed before that, it stays in the registry until its lease expires and callers keep picking it.
   # Set explicitly: Docker Desktop 29.3 killed containers 1.5-2 s after docker stop by default
   stop_grace_period: 30s
+  # Without a limit, each JVM sizes its heap from the whole machine (a quarter of it); eight of them could take far
+  # more than a small server has. With a limit, Java sizes itself from the limit
+  mem_limit: 512m
 
 # Each service reads only the variables it uses
 x-service-env: &service-env
+  # The heap may use half of the container's memory; the rest is for the JVM itself (classes, threads, buffers)
+  JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=50
   EUREKA_URL: http://service-discovery:8761/eureka/
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
   REDIS_HOST: redis
@@ -102,6 +107,8 @@ services:
       # Topics and events are kept in the kafka-data volume, so they survive a new container. Without this setting
       # Kafka writes to /tmp/kafka-logs inside the container, which is lost when the container is recreated
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # The image's default heap is a fixed 1 GB; a few events a second need far less
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -125,6 +132,9 @@ services:
     <<: *service
     build: ./service-discovery
     image: vanmool/service-discovery
+    mem_limit: 384m
+    environment:
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=50
     ports:
       # The Eureka dashboard: which instances are registered
       - "127.0.0.1:8761:8761"
@@ -155,6 +165,8 @@ services:
     <<: *service
     build: ./product-service
     image: vanmool/product-service
+    # The busiest service (catalog, stock, Redis cache, Kafka): at 512 MB it used 87% under load
+    mem_limit: 640m
     environment:
       <<: *service-env
       DB_URL: jdbc:mysql://mysql:3306/product_db
@@ -226,6 +238,7 @@ services:
     <<: *service
     build: ./notification-service
     image: vanmool/notification-service
+    mem_limit: 384m
     environment:
       <<: *service-env
       MAIL_HOST: mailpit

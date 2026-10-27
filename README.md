@@ -290,6 +290,7 @@ This builds the eight images and starts them with MySQL, Redis, Kafka and Mailpi
 - **Start order:** a service starts once what it needs is healthy (MySQL, Kafka, Redis, the registry). Every HTTP service has a health check on its Actuator health; on the first start here all eleven checked containers were healthy 48 s after `up`.
 - **Restarts:** a service that stops is started again (`restart: unless-stopped`), unless it was stopped on purpose.
 - **Stopping:** each service gets 30 s between the stop signal and a forced kill (`stop_grace_period`). It needs about 4–6 s to finish its requests and leave Eureka. Docker Desktop 29.3 killed containers 1.5–2 s after `docker stop` by default; a service killed before leaving Eureka stays in the registry until its lease expires (about 40 s), and callers keep picking it.
+- **Memory:** each container has a limit, 512 MB (640 MB for product-service, the busiest; 384 MB for the registry and the notification service), and Java sizes itself from it: half of it for the heap (`-XX:MaxRAMPercentage=50`), the rest for the JVM itself. Without limits, each JVM would size its heap from the whole machine. Kafka's heap is 512 MB instead of the image's 1 GB.
 - **Public address:** `PUBLIC_URL` (default `http://127.0.0.1:8000`) is the tokens' issuer and the base of the links the services hand out, such as the payment pages, because clients reach everything through the gateway.
 - **Signing key:** with `JWT_PRIVATE_KEY` set, sessions survive a restart of the user-auth service; without it, a new key is made at every start. Generate one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` and put the lines between the `BEGIN` and `END` markers on one line.
 - **Payments:** `PAYMENT_FAKE_GATEWAY_ENABLED=true` turns on the fake gateway to try payments without a Razorpay or Stripe account; its webhook comes in through the gateway, like a real one's.
@@ -304,7 +305,19 @@ docker compose --profile app down                    # stop and remove the conta
 docker compose --profile app down -v                 # also delete the data (databases, carts, events)
 ```
 
-Without memory limits, the whole stack used about 4.7 GB right after starting.
+Measured on a laptop (8 CPUs, Docker Desktop on Windows), 2026-10-27:
+
+| Check | Result |
+|---|---|
+| `up` until every checked container is healthy | 48 s (first start, no memory limits); 68–74 s with the limits |
+| A purchase through the gateway: cart, order, fake payment, webhook, Kafka | order `CONFIRMED` 0.6 s after paying; order, payment and welcome emails in Mailpit |
+| 10 clients for 60 s (catalog, product, stock, cart) | 32,775 requests (546 a second), median 13–19 ms, p95 29–44 ms; 2 failed (below) |
+| Memory under that load | 172–454 MB per service, 2.6 GB for the eight; with Kafka, MySQL, Redis and Mailpit 3.9 GB. No container killed or restarted |
+| user-auth-service restarted | the customer's token still works afterwards; logins unavailable for 26 s (8 s to start, the rest until the gateway sees the new instance) |
+| Kafka stopped while an order is placed | the order is placed; its email goes out once Kafka is back (12.8 s after starting it) |
+| MySQL stopped | the database services answer 500 after 30 s (through the gateway: 504 after 10 s) until they are marked down (about 34 s), then 503 at once; all work again 31 s after MySQL is back, without a restart |
+
+Known limits, to be improved: while the database is unreachable, a request waits 30 s for a connection before failing (a short timeout and a 503 would be better); and about one request in 15,000 failed at the gateway because product-service closed a pooled connection just as it was being reused.
 
 ## Service discovery (Eureka)
 

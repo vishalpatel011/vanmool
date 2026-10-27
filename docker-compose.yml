@@ -1,6 +1,33 @@
-# Local infrastructure for development: docker compose up -d
-# MySQL runs outside Docker for now (see README); the services themselves join this file when they are containerized.
+# Local infrastructure for development: docker compose up -d starts Redis, Kafka and Mailpit.
+# The services run outside Docker then (IntelliJ, ./mvnw), with the MySQL installed on this machine.
+# The profile "app" adds what the containerized stack needs: docker compose --profile app up -d
 services:
+  # The services' databases for the containerized stack: one server, a database and a user per service, created by
+  # infrastructure/mysql/init on the first start. MySQL 8.4 is the long-term support release (8.0 ended in April 2026)
+  mysql:
+    image: mysql:8.4
+    profiles: ["app"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      PRODUCT_DB_PASSWORD: ${PRODUCT_DB_PASSWORD:-}
+      USER_DB_PASSWORD: ${USER_DB_PASSWORD:-}
+      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:-}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:-}
+    ports:
+      # For a database client on this machine; the services use mysql:3306 inside the network.
+      # 3307, because a MySQL installed on this machine usually has 3306
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./infrastructure/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP: while the init scripts run, MySQL accepts only local socket connections, so this stays unhealthy
+      # until the databases and users exist
+      test: ["CMD", "mysqladmin", "ping", "--host=127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   redis:
     image: redis:7.4-alpine
     # appendonly: every change is also written to a log on disk (flushed once a second), so carts, which live only
@@ -25,11 +52,13 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      # The address clients are told to use. Services in containers will need a second listener (Docker step)
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # Two addresses for clients: localhost:9092 for services running on this machine, kafka:29092 for services in
+      # containers. A client first asks any address for the broker list, then connects to the address advertised for
+      # the listener it came in on, so each kind of client is told an address it can reach
+      KAFKA_LISTENERS: PLAINTEXT://:9092,DOCKER://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,DOCKER://kafka:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,DOCKER:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       # One broker, so every internal topic has one copy
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -58,5 +87,6 @@ services:
       - "127.0.0.1:8025:8025"
 
 volumes:
+  mysql-data:
   redis-data:
   kafka-data:

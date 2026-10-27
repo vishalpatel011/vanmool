@@ -106,7 +106,8 @@ vanmool/
 ├── mvnw, mvnw.cmd       Maven wrapper
 ├── .mvn/
 ├── .env.example         environment variables the services read
-├── docker-compose.yml   local infrastructure: Redis, Kafka, Mailpit
+├── docker-compose.yml   local infrastructure: Redis, Kafka, Mailpit; MySQL with --profile app
+├── infrastructure/mysql/init/  creates the services' databases and users in the MySQL container
 ├── user-auth-service/   accounts, login and tokens (same layout as product-service)
 ├── cart-service/       shopping carts in Redis (same layout; clients/ holds the call to product-service)
 ├── order-service/      orders (same layout; clients/ holds the calls to cart-service and product-service)
@@ -180,7 +181,7 @@ docker compose up -d
 This starts, reachable from this machine only:
 
 - **Redis 7** on `localhost:6379`. Its data is kept in a Docker volume (`redis-data`) and written to disk once a second (append-only file), so it survives a restart of the container.
-- **Kafka 3.9** on `localhost:9092`: one broker in KRaft mode (no ZooKeeper), data in the `kafka-data` volume. Topics are not created automatically; each service declares the topics it owns when it starts.
+- **Kafka 3.9** on `localhost:9092`: one broker in KRaft mode (no ZooKeeper), data in the `kafka-data` volume. Topics are not created automatically; each service declares the topics it owns when it starts. Services in containers reach the same broker at `kafka:29092`: Kafka tells each client the address of the listener it came in on, so a client on this machine and one in a container each get an address they can reach.
 - **Mailpit**: an SMTP server on `localhost:1025` that keeps every email instead of delivering it, with a web page at http://localhost:8025 to read them.
 
 `docker compose stop` stops them; `docker compose down -v` also deletes their data.
@@ -256,6 +257,23 @@ Settings come from environment variables, as outside Docker (see the table in Ge
 ```
 docker run -p 8761:8761 vanmool/service-discovery
 ```
+
+### MySQL in Docker
+
+For the containerized stack, MySQL runs in a container too (profile `app`; a plain `docker compose up -d` leaves it out):
+
+1. Copy the last block of `.env.example` (the `MYSQL_ROOT_PASSWORD` and `*_DB_PASSWORD` lines) into a file named `.env` next to `docker-compose.yml`, with passwords of your own. Docker Compose reads `.env` by itself; it is git-ignored.
+2. `docker compose --profile app up -d mysql`
+
+On its first start, with an empty `mysql-data` volume, the container runs `infrastructure/mysql/init/create-databases.sh`: it creates `product_db`, `user_db`, `order_db` and `payment_db`, each with its own user (`ProductService_user`, `UserAuthService_user`, `OrderService_user`, `PaymentService_user`) that can reach only that database. The health check turns healthy only after that, because MySQL accepts no TCP connections while the script runs (14 s on the first start here). The passwords are set only then: to change them later, use `ALTER USER`, or `docker compose down -v` to start over with empty databases.
+
+The image is MySQL 8.4, the long-term support release (8.0 reached its end of life in April 2026). The services' tests pass against it as well as against a local MySQL 8.0, for example:
+
+```
+DB_URL=jdbc:mysql://localhost:3307/product_db DB_USERNAME=ProductService_user DB_PASSWORD=... ./mvnw -pl product-service verify
+```
+
+The container listens on `127.0.0.1:3307` for a database client on this machine (3306 is usually taken by a local MySQL); services in containers use `mysql:3306`.
 
 ## Service discovery (Eureka)
 

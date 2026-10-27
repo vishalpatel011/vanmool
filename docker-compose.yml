@@ -1,6 +1,33 @@
 # Local infrastructure for development: docker compose up -d starts Redis, Kafka and Mailpit.
 # The services run outside Docker then (IntelliJ, ./mvnw), with the MySQL installed on this machine.
-# The profile "app" adds what the containerized stack needs: docker compose --profile app up -d
+# The profile "app" adds MySQL and the eight services, the whole stack in containers:
+#   docker compose --profile app up -d --build
+# Passwords and keys come from .env (see .env.example).
+
+# Settings shared by the services
+x-service: &service
+  profiles: ["app"]
+  # Started again if it stops, unless stopped on purpose (docker compose stop)
+  restart: unless-stopped
+
+# Each service reads only the variables it uses
+x-service-env: &service-env
+  EUREKA_URL: http://service-discovery:8761/eureka/
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  REDIS_HOST: redis
+  # Clients reach everything through the API gateway, so its address is the tokens' issuer and the base of the links
+  # the services hand out (password reset, payment pages)
+  AUTH_ISSUER: ${PUBLIC_URL:-http://localhost:8000}
+
+# A service is healthy when its Actuator health is UP. start_period: the first start of all the services at once
+# takes a while, failures then do not count
+x-health: &health
+  interval: 10s
+  timeout: 3s
+  retries: 3
+  start_period: 120s
+  start_interval: 2s
+
 services:
   # The services' databases for the containerized stack: one server, a database and a user per service, created by
   # infrastructure/mysql/init on the first start. MySQL 8.4 is the long-term support release (8.0 ended in April 2026)
@@ -85,6 +112,140 @@ services:
     ports:
       - "127.0.0.1:1025:1025"
       - "127.0.0.1:8025:8025"
+
+  # --- The services (profile app). Only the API gateway, the Eureka dashboard and Mailpit's page are published, on
+  # --- this machine only; the services reach each other by name inside the network
+
+  service-discovery:
+    <<: *service
+    build: ./service-discovery
+    image: vanmool/service-discovery
+    ports:
+      # The Eureka dashboard: which instances are registered
+      - "127.0.0.1:8761:8761"
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8761/actuator/health"]
+
+  user-auth-service:
+    <<: *service
+    build: ./user-auth-service
+    image: vanmool/user-auth-service
+    environment:
+      <<: *service-env
+      DB_URL: jdbc:mysql://mysql:3306/user_db
+      DB_USERNAME: UserAuthService_user
+      DB_PASSWORD: ${USER_DB_PASSWORD:-}
+      # The key that signs tokens. Without it a new one is made at every start, and a restart ends every session
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+    depends_on: &needs-mysql-kafka
+      mysql: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8081/actuator/health"]
+
+  product-service:
+    <<: *service
+    build: ./product-service
+    image: vanmool/product-service
+    environment:
+      <<: *service-env
+      DB_URL: jdbc:mysql://mysql:3306/product_db
+      DB_USERNAME: ProductService_user
+      DB_PASSWORD: ${PRODUCT_DB_PASSWORD:-}
+    depends_on:
+      mysql: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/actuator/health"]
+
+  cart-service:
+    <<: *service
+    build: ./cart-service
+    image: vanmool/cart-service
+    environment:
+      <<: *service-env
+    depends_on:
+      redis: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8082/actuator/health"]
+
+  order-service:
+    <<: *service
+    build: ./order-service
+    image: vanmool/order-service
+    environment:
+      <<: *service-env
+      DB_URL: jdbc:mysql://mysql:3306/order_db
+      DB_USERNAME: OrderService_user
+      DB_PASSWORD: ${ORDER_DB_PASSWORD:-}
+    depends_on: *needs-mysql-kafka
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8083/actuator/health"]
+
+  payment-service:
+    <<: *service
+    build: ./payment-service
+    image: vanmool/payment-service
+    environment:
+      <<: *service-env
+      DB_URL: jdbc:mysql://mysql:3306/payment_db
+      DB_USERNAME: PaymentService_user
+      DB_PASSWORD: ${PAYMENT_DB_PASSWORD:-}
+      # The customer's browser is sent to the payment pages through the API gateway
+      PAYMENT_PUBLIC_BASE_URL: ${PUBLIC_URL:-http://localhost:8000}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # Off unless .env turns it on: anyone could mark payments paid with it
+      PAYMENT_FAKE_GATEWAY_ENABLED: ${PAYMENT_FAKE_GATEWAY_ENABLED:-false}
+      # Its webhook comes in through the API gateway, like a real gateway's
+      PAYMENT_FAKE_WEBHOOK_URL: http://api-gateway:8000/payments/webhooks/fake
+    depends_on: *needs-mysql-kafka
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8085/actuator/health"]
+
+  # No HTTP port, so no health check: it only reads Kafka and sends email
+  notification-service:
+    <<: *service
+    build: ./notification-service
+    image: vanmool/notification-service
+    environment:
+      <<: *service-env
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+    depends_on:
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      mailpit: { condition: service_started }
+
+  api-gateway:
+    <<: *service
+    build: ./api-gateway
+    image: vanmool/api-gateway
+    environment:
+      <<: *service-env
+    ports:
+      # The one address clients use
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      service-discovery: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/actuator/health"]
 
 volumes:
   mysql-data:

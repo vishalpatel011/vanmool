@@ -262,7 +262,7 @@ docker run -p 8761:8761 vanmool/service-discovery
 
 For the containerized stack, MySQL runs in a container too (profile `app`; a plain `docker compose up -d` leaves it out):
 
-1. Copy the last block of `.env.example` (the `MYSQL_ROOT_PASSWORD` and `*_DB_PASSWORD` lines) into a file named `.env` next to `docker-compose.yml`, with passwords of your own. Docker Compose reads `.env` by itself; it is git-ignored.
+1. Copy the last block of `.env.example` (from `MYSQL_ROOT_PASSWORD` to the end) into a file named `.env` next to `docker-compose.yml`, with passwords of your own. Docker Compose reads `.env` by itself; it is git-ignored.
 2. `docker compose --profile app up -d mysql`
 
 On its first start, with an empty `mysql-data` volume, the container runs `infrastructure/mysql/init/create-databases.sh`: it creates `product_db`, `user_db`, `order_db` and `payment_db`, each with its own user (`ProductService_user`, `UserAuthService_user`, `OrderService_user`, `PaymentService_user`) that can reach only that database. The health check turns healthy only after that, because MySQL accepts no TCP connections while the script runs (14 s on the first start here). The passwords are set only then: to change them later, use `ALTER USER`, or `docker compose down -v` to start over with empty databases.
@@ -273,7 +273,37 @@ The image is MySQL 8.4, the long-term support release (8.0 reached its end of li
 DB_URL=jdbc:mysql://localhost:3307/product_db DB_USERNAME=ProductService_user DB_PASSWORD=... ./mvnw -pl product-service verify
 ```
 
-The container listens on `127.0.0.1:3307` for a database client on this machine (3306 is usually taken by a local MySQL); services in containers use `mysql:3306`.
+The container listens on `127.0.0.1:3307` for a database client on this machine (3306 is usually taken by a local MySQL); services in containers use `mysql:3306`. Flyway logs a warning that it has not been tested with MySQL 8.4 (its newest tested version is 8.1); every migration and test passes against 8.4.
+
+### The whole stack in Docker
+
+With the `.env` described above (passwords, and optionally `JWT_PRIVATE_KEY`, `PAYMENT_FAKE_GATEWAY_ENABLED`, `PUBLIC_URL`):
+
+```
+docker compose --profile app up -d --build
+```
+
+This builds the eight images and starts them with MySQL, Redis, Kafka and Mailpit. Stop the services started from IntelliJ first: the stack uses the same ports for the gateway and the registry.
+
+- **One address for clients:** the API gateway at `http://localhost:8000`. The Eureka dashboard (`http://localhost:8761`) and Mailpit (`http://localhost:8025`) are also published; the services' own ports are not, so every request goes through the gateway. All of them listen on this machine only (`127.0.0.1`).
+- **Names, not addresses:** inside the Compose network the services reach `mysql:3306`, `redis:6379`, `kafka:29092`, `mailpit:1025` and `service-discovery:8761` by name, and each other through Eureka, which hands out the containers' addresses.
+- **Start order:** a service starts once what it needs is healthy (MySQL, Kafka, Redis, the registry). Every HTTP service has a health check on its Actuator health; on the first start here all eleven checked containers were healthy 48 s after `up`.
+- **Restarts:** a service that stops is started again (`restart: unless-stopped`), unless it was stopped on purpose.
+- **Public address:** `PUBLIC_URL` (default `http://localhost:8000`) is the tokens' issuer and the base of the links the services hand out, such as the payment pages, because clients reach everything through the gateway.
+- **Signing key:** with `JWT_PRIVATE_KEY` set, sessions survive a restart of the user-auth service; without it, a new key is made at every start. Generate one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` and put the lines between the `BEGIN` and `END` markers on one line.
+- **Payments:** `PAYMENT_FAKE_GATEWAY_ENABLED=true` turns on the fake gateway to try payments without a Razorpay or Stripe account; its webhook comes in through the gateway, like a real one's.
+
+Useful commands:
+
+```
+docker compose --profile app ps                      # status and health of every container
+docker compose --profile app logs -f order-service   # one service's log
+docker compose --profile app up -d --build cart-service   # rebuild and restart one service after a code change
+docker compose --profile app down                    # stop and remove the containers, keep the data
+docker compose --profile app down -v                 # also delete the data (databases, carts, events)
+```
+
+Without memory limits, the whole stack used about 4.7 GB right after starting.
 
 ## Service discovery (Eureka)
 
@@ -777,6 +807,7 @@ Errors use the same format as the other services. Codes: `ORDER_NOT_FOUND`, `PAY
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Razorpay test mode keys | empty (Razorpay off) |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe test mode keys | empty (Stripe off) |
 | `PAYMENT_FAKE_GATEWAY_ENABLED` | Turns the fake gateway on, for development only | `false` |
+| `PAYMENT_FAKE_WEBHOOK_URL` | Where the fake gateway sends its webhooks | `PAYMENT_PUBLIC_BASE_URL` + `/payments/webhooks/fake` |
 
 ## Events (Kafka)
 
@@ -894,7 +925,7 @@ In the cart service, the call to the product service is tested against `MockRest
 - [x] Notification service: welcome, order, payment, cancellation, shipping and delivery emails from Kafka events, each sent once
 - [x] Spring Cloud: Eureka service discovery; services call each other by name with client-side load balancing
 - [x] Spring Cloud: API Gateway with routes by path, request ids and an access log; internal endpoints not exposed
-- [ ] Docker and Docker Compose
+- [x] Docker: an image per service; the whole stack (MySQL, Redis, Kafka, Mailpit, eight services) in Docker Compose
 
 ## Future scope
 

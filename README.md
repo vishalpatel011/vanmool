@@ -206,7 +206,7 @@ Each service reads its settings from the environment of its own process, so the 
 | `CART_SERVICE_URL` | Base URL of cart-service: a service name, resolved through Eureka | not used | not used | not used | `http://cart-service` |
 | `EUREKA_URL` | Where the service registers and reads the registry | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` | `http://localhost:8761/eureka/` |
 
-The API gateway reads `EUREKA_URL`, `SERVER_PORT` (default `8000`) and `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` (for its rate limits).
+The API gateway reads `EUREKA_URL`, `SERVER_PORT` (default `8000`), `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` (rate limits and ended tokens) and `KAFKA_BOOTSTRAP_SERVERS` (the `TokenRevoked` events).
 
 - **IntelliJ IDEA:** Run > Edit Configurations > `ProductServiceApplication` (or `UserAuthServiceApplication`, `CartServiceApplication`, `OrderServiceApplication`) > Environment variables, for example `DB_USERNAME=vanmool_user;DB_PASSWORD=choose-a-password`.
 - **Shell:** export the variables before running, for example `export DB_PASSWORD=choose-a-password`.
@@ -276,6 +276,12 @@ Clients use one address, `http://localhost:8000` (Spring Cloud Gateway on WebFlu
   - If Redis is down, requests are let through rather than refused, and the gateway stays healthy.
   - Behind a load balancer, the client's address must be taken from `X-Forwarded-For`, which only the load balancer may set.
 - **Time limits.** 1 second to connect to a service, 10 seconds for its answer (starting a payment calls a payment gateway).
+- **Ended tokens are refused.** The services check tokens themselves, with the user-auth service's public keys, so on their own they would accept a token until it expires, also after a logout. The user-auth service therefore publishes a `TokenRevoked` event (on `user-events`) for every token it ends: a logout, the other sessions of a password change, all sessions of a password reset.
+  - The gateway reads these events (consumer group `api-gateway`) and keeps each ended token's id in Redis (`revoked-token:{jti}`) until the token would have expired. A request with such a token gets `401 INVALID_TOKEN` ("The token has been revoked") before it reaches any service.
+  - The gateway reads only the token's id. Checking its signature stays with the services, so a made-up token with an unknown id still fails there.
+  - `/auth/**` is left to the user-auth service, which keeps its own list.
+  - If Redis is down, tokens are let through: they are still checked by the services, but an early logout is not seen until Redis is back.
+  - Called directly, without the gateway, the services would still accept an ended token until it expires. In a deployment only the gateway is reachable from outside.
 
 ## Product Service API
 
@@ -486,7 +492,7 @@ Passwords are checked by Spring Security (a `UserDetailsService` that reads `use
 
 **Profile.** `PATCH /users/me` changes only the fields it is sent; today that is `name` (not blank, at most 100 characters), for example `{ "name": "Asha Vasava" }`. The email cannot be changed here: a new address would first have to be confirmed through a link sent to it, and the email is also held in tokens and orders.
 
-**Changing the password.** `PUT /users/me/password` takes `{ "currentPassword": "...", "newPassword": "..." }`. The current password is asked for again although the request carries a valid token, so a token left on a shared or stolen device is not enough to take over the account; a wrong one gets `403 CURRENT_PASSWORD_INCORRECT` (not 401, which would sign the user out). The new password follows the signup rules and must differ from the current one. On success the new BCrypt hash is stored, every other session of the user is revoked (the device that made the change stays signed in), and a `PasswordChanged` event makes the notification service email the user, so a change they did not make does not go unnoticed. The other services check tokens locally with the public keys, so there an ended session works until its token expires.
+**Changing the password.** `PUT /users/me/password` takes `{ "currentPassword": "...", "newPassword": "..." }`. The current password is asked for again although the request carries a valid token, so a token left on a shared or stolen device is not enough to take over the account; a wrong one gets `403 CURRENT_PASSWORD_INCORRECT` (not 401, which would sign the user out). The new password follows the signup rules and must differ from the current one. On success the new BCrypt hash is stored, every other session of the user is revoked (the device that made the change stays signed in), and a `PasswordChanged` event makes the notification service email the user, so a change they did not make does not go unnoticed. The other services check tokens locally with the public keys; an ended session is refused there by the API gateway (see below), which learns of it from a `TokenRevoked` event.
 
 **Forgotten password.** `POST /auth/password-reset` takes `{ "email": "..." }` and always answers `202`, whether or not the address has an account, so it cannot be used to find out who is registered. For an account, it creates a link that works once, for 30 minutes (`auth.password-reset.validity`), and the notification service emails it. At most 3 links per account are sent per hour, so nobody can flood a mailbox.
 

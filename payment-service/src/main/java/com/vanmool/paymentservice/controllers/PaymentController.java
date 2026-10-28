@@ -8,6 +8,8 @@ import com.vanmool.paymentservice.exceptions.NotAUserTokenException;
 import com.vanmool.paymentservice.services.Customer;
 import com.vanmool.paymentservice.services.PaymentService;
 import com.vanmool.paymentservice.services.ReconciliationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +25,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.util.UUID;
 
 @RestController
+@Tag(name = "Payments", description = "Paying for an order")
 public class PaymentController {
     private final PaymentService paymentService;
     private final ReconciliationService reconciliationService;
@@ -33,6 +36,7 @@ public class PaymentController {
     }
 
     // 201 with a new payment link; 200 with the order's open link if there already is one
+    @Operation(summary = "Start a payment for an order: returns the gateway's payment page")
     @PostMapping("/payments")
     public ResponseEntity<PaymentResponseDto> startPayment(@AuthenticationPrincipal Jwt jwt,
                                                            @Valid @RequestBody StartPaymentRequestDto request,
@@ -45,12 +49,14 @@ public class PaymentController {
                 .body(started.payment());
     }
 
+    @Operation(summary = "A payment and its status history")
     @GetMapping("/payments/{id}")
     public PaymentDetailsDto getPayment(@AuthenticationPrincipal Jwt jwt, @PathVariable("id") UUID paymentId) {
         return paymentService.getPayment(customer(jwt).id(), paymentId);
     }
 
     // ADMIN only: run the reconciliation now instead of waiting for its schedule
+    @Operation(summary = "ADMIN: compare open and recent payments with their gateways")
     @PostMapping("/payments/reconciliation")
     public ResponseEntity<ReconciliationReportDto> reconcile() {
         return new ResponseEntity<>(reconciliationService.reconcile(), HttpStatus.OK);

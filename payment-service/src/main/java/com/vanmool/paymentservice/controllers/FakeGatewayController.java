@@ -1,6 +1,7 @@
 package com.vanmool.paymentservice.controllers;
 
 import com.vanmool.paymentservice.gateways.FakeGateway;
+import io.swagger.v3.oas.annotations.Hidden;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,8 @@ import java.net.URI;
 // URL, like a real gateway's checkout
 @RestController
 @ConditionalOnProperty(name = "payment.fake.enabled", havingValue = "true")
+// A development tool, not part of the API: left out of the OpenAPI description
+@Hidden
 public class FakeGatewayController {
     private final FakeGateway fakeGateway;
 

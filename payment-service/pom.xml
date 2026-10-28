@@ -15,6 +15,7 @@
     <description>Payments for Vanmool orders through Razorpay and Stripe: links, webhooks, reconciliation</description>
     <properties>
         <java.version>17</java.version>
+        <springdoc.version>2.10.0</springdoc.version>
         <!-- The Spring Cloud release train that goes with Spring Boot 3.5 -->
         <spring-cloud.version>2025.0.3</spring-cloud.version>
         <razorpay.version>1.4.10</razorpay.version>
@@ -105,6 +106,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- OpenAPI description at /v3/api-docs and Swagger UI at /swagger-ui.html -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
         </dependency>
     </dependencies>
     <dependencyManagement>

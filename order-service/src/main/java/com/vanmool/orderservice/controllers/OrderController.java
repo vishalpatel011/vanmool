@@ -6,6 +6,8 @@ import com.vanmool.orderservice.exceptions.InvalidIdempotencyKeyException;
 import com.vanmool.orderservice.exceptions.NotAUserTokenException;
 import com.vanmool.orderservice.services.Customer;
 import com.vanmool.orderservice.services.OrderService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -30,6 +32,7 @@ import java.util.regex.Pattern;
 // can only see and change their own orders.
 @RestController
 @RequestMapping("/orders")
+@Tag(name = "Orders", description = "The signed-in customer's orders")
 public class OrderController {
     private static final Pattern IDEMPOTENCY_KEY = Pattern.compile("[A-Za-z0-9_-]{1,100}");
 
@@ -41,6 +44,7 @@ public class OrderController {
 
     // Places an order from the customer's cart. An optional Idempotency-Key header (any unique string, such as a UUID
     // the client creates once per checkout) makes the request safe to repeat: the same key returns the same order.
+    @Operation(summary = "Place an order from the cart; the stock is reserved (optional Idempotency-Key header)")
     @PostMapping
     public ResponseEntity<OrderResponseDto> placeOrder(
             @AuthenticationPrincipal Jwt jwt,
@@ -56,17 +60,20 @@ public class OrderController {
     }
 
     // Order history, newest first: ?page=0&size=10 (at most 50 per page)
+    @Operation(summary = "The customer's orders, newest first")
     @GetMapping
     public Page<OrderResponseDto> getOrders(@AuthenticationPrincipal Jwt jwt, @PageableDefault(size = 10) Pageable pageable) {
         return orderService.getOrders(userId(jwt), pageable);
     }
 
+    @Operation(summary = "One order, with its shipment and status history")
     @GetMapping("/{id}")
     public OrderResponseDto getOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable("id") UUID orderId) {
         return orderService.getOrder(userId(jwt), orderId);
     }
 
     // A state change, not a removal: the order stays in the history as CANCELLED, so POST rather than DELETE
+    @Operation(summary = "Cancel an order that is not paid yet")
     @PostMapping("/{id}/cancel")
     public OrderResponseDto cancelOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable("id") UUID orderId) {
         return orderService.cancelOrder(customer(jwt), orderId);

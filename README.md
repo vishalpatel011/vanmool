@@ -78,6 +78,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 | Security | Spring Security, Spring Authorization Server (OAuth2 / OpenID Connect), BCrypt, JJWT and Nimbus JOSE (RS256) |
 | Messaging and email | Apache Kafka 3.9 (KRaft, Spring for Apache Kafka), Spring Mail; Mailpit in development |
 | Payments | Razorpay Java SDK, Stripe Java SDK (test mode) |
+| API documentation | springdoc-openapi (OpenAPI 3, Swagger UI) |
 | Testing | JUnit 5, Mockito, MockMvc, WebTestClient, MockRestServiceServer, JaCoCo |
 | Build and run | Maven (wrapper), Docker, Docker Compose |
 | Cloud | AWS: EC2, EBS, VPC, security groups, RDS, Elastic Beanstalk, CloudFormation |
@@ -98,6 +99,7 @@ This builds the eight images and starts them with MySQL 8.4, Redis, Kafka and Ma
 | URL | What |
 |---|---|
 | http://127.0.0.1:8000 | The API, through the gateway (the only port clients use) |
+| http://127.0.0.1:8000/swagger-ui.html | Swagger UI: the whole API, every service, with "Try it out" |
 | http://127.0.0.1:8761 | Eureka dashboard: registered instances |
 | http://127.0.0.1:8025 | Mailpit: every email the platform sends |
 
@@ -146,7 +148,7 @@ Every setting comes from environment variables with local defaults; `.env.exampl
 
 ## API
 
-Clients call the gateway; the services' own ports are internal.
+Clients call the gateway; the services' own ports are internal. **Interactive documentation:** the gateway's Swagger UI at `/swagger-ui.html` shows every service's OpenAPI description (each service also serves its own at `/v3/api-docs`); "Authorize" takes a token from `POST /auth/login`, and "Try it out" sends requests through the gateway.
 
 - **Authentication:** `Authorization: Bearer <token>` with a token from `POST /auth/login` (valid 10 hours) or the OAuth2 flow.
 - **Errors** share one format everywhere, with a stable `error` code for clients and a `message` for people:

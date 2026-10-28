@@ -17,6 +17,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.util.Map;
 
+import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -78,6 +80,30 @@ class GatewayRoutingIT {
                 .jsonPath("$.service").isEqualTo(service)
                 .jsonPath("$.method").isEqualTo(method)
                 .jsonPath("$.path").isEqualTo(path);
+    }
+
+    @ParameterizedTest(name = "/api-docs/{0}")
+    @CsvSource({"product-service", "user-auth-service", "cart-service", "order-service", "payment-service"})
+    void eachServicesApiDescription_isFetchedFromItsV3ApiDocs(String service) {
+        client.get().uri("/api-docs/" + service).exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.service").isEqualTo(service)
+                .jsonPath("$.path").isEqualTo("/v3/api-docs");
+    }
+
+    @Test
+    void theSwaggerPage_isServedByTheGateway_andListsEveryService() {
+        client.get().uri("/v3/api-docs/swagger-config").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.urls[*].url").value(containsInAnyOrder("/api-docs/product-service",
+                        "/api-docs/user-auth-service", "/api-docs/cart-service", "/api-docs/order-service",
+                        "/api-docs/payment-service"));
+        client.get().uri("/swagger-ui.html").exchange()
+                .expectStatus().is3xxRedirection()
+                .expectHeader().value("Location", endsWith("/swagger-ui/index.html"));
+        client.get().uri("/swagger-ui/index.html").exchange().expectStatus().isOk();
     }
 
     @Test

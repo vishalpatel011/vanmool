@@ -5,6 +5,8 @@ import com.vanmool.userauthservice.dtos.UpdateProfileRequestDto;
 import com.vanmool.userauthservice.dtos.UserDto;
 import com.vanmool.userauthservice.models.Role;
 import com.vanmool.userauthservice.services.UserService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -23,6 +25,7 @@ import java.util.UUID;
 // (SecurityConfig), so authentication is not repeated here.
 @RestController
 @RequestMapping("/users")
+@Tag(name = "Users", description = "The signed-in user's profile, and roles")
 public class UserController {
     private final UserService userService;
 
@@ -31,18 +34,21 @@ public class UserController {
     }
 
     // The JWT's "sub" claim is the user's id, in tokens from POST /auth/login and from /oauth2/token alike
+    @Operation(summary = "The signed-in user")
     @GetMapping("/me")
     public UserDto me(@AuthenticationPrincipal Jwt jwt) {
         return UserDto.from(userService.getUser(UUID.fromString(jwt.getSubject())));
     }
 
     // Profile management (PRD 1.3): changes only the fields sent, and answers with the whole profile
+    @Operation(summary = "Change the profile (the name)")
     @PatchMapping("/me")
     public UserDto updateProfile(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody UpdateProfileRequestDto request) {
         return UserDto.from(userService.updateProfile(UUID.fromString(jwt.getSubject()), request.getName()));
     }
 
     // 204: nothing to show. The token's "jti" names the session making the change, which stays signed in
+    @Operation(summary = "Change the password: the current one is asked again, and other sessions end")
     @PutMapping("/me/password")
     public ResponseEntity<Void> changePassword(@AuthenticationPrincipal Jwt jwt,
                                                @Valid @RequestBody ChangePasswordRequestDto request) {
@@ -53,6 +59,7 @@ public class UserController {
 
     // ADMIN only (SecurityConfig). For example, a producer is given the SELLER role so that they can list products.
     // PUT because the result is the same however often the request is repeated.
+    @Operation(summary = "ADMIN: grant the SELLER or ADMIN role")
     @PutMapping("/{id}/roles/{role}")
     public UserDto grantRole(@PathVariable("id") UUID id, @PathVariable("role") Role role) {
         return UserDto.from(userService.grantRole(id, role));

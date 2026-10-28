@@ -3,6 +3,8 @@ package com.vanmool.userauthservice.controllers;
 import com.vanmool.userauthservice.dtos.PasswordResetConfirmDto;
 import com.vanmool.userauthservice.dtos.PasswordResetRequestDto;
 import com.vanmool.userauthservice.services.PasswordResetService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +20,7 @@ import java.util.regex.Pattern;
 // Password reset (PRD 1.4). Open to everyone (/auth/**): the person has forgotten their password, so they have no token.
 @RestController
 @RequestMapping("/auth/password-reset")
+@Tag(name = "Password reset", description = "A forgotten password, through a one-time emailed link")
 public class PasswordResetController {
     // What PasswordResetService puts in a link: 32 random bytes in Base64url
     private static final Pattern TOKEN = Pattern.compile("[A-Za-z0-9_-]{43}");
@@ -29,12 +32,14 @@ public class PasswordResetController {
     }
 
     // 202 for every valid email, with or without an account: the answer must not tell which emails are registered
+    @Operation(summary = "Email a one-time reset link (202 whether or not the address has an account)")
     @PostMapping
     public ResponseEntity<Void> requestReset(@Valid @RequestBody PasswordResetRequestDto request) {
         passwordResetService.requestReset(request.getEmail());
         return ResponseEntity.accepted().build();
     }
 
+    @Operation(summary = "Set a new password with the link's token; every session ends")
     @PostMapping("/confirm")
     public ResponseEntity<Void> resetPassword(@Valid @RequestBody PasswordResetConfirmDto request) {
         passwordResetService.resetPassword(request.getToken(), request.getNewPassword());
@@ -46,6 +51,7 @@ public class PasswordResetController {
     // its own can replace this page (PASSWORD_RESET_LINK).
     // The token is only written into the page when it has the token's exact shape, so nothing else can be injected.
     // no-referrer: the address with the token is never sent on to another site
+    @Operation(summary = "The page the emailed link opens")
     @GetMapping(value = "/confirm", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> resetPage(@RequestParam(name = "token", required = false) String token) {
         String body = token != null && TOKEN.matcher(token).matches() ? FORM.formatted(token) : INVALID_LINK;

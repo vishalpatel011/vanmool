@@ -3,6 +3,8 @@ package com.vanmool.paymentservice.controllers;
 import com.vanmool.paymentservice.dtos.PaymentResponseDto;
 import com.vanmool.paymentservice.models.GatewayName;
 import com.vanmool.paymentservice.services.PaymentService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +22,7 @@ import java.util.Map;
 // What the gateways send back. Neither needs a JWT: a webhook is checked by its signature, a callback by asking the
 // gateway. The path names the gateway: /payments/webhooks/razorpay, /payments/callback/stripe, ...
 @RestController
+@Tag(name = "Payment gateways", description = "What Razorpay and Stripe send back")
 public class GatewayController {
     private final PaymentService paymentService;
 
@@ -29,6 +32,7 @@ public class GatewayController {
 
     // The raw bytes: the signature is computed over the exact body, so it must not be re-encoded or re-formatted.
     // 200 tells the gateway to stop retrying; anything else makes it send the event again later
+    @Operation(summary = "A gateway's webhook: signature checked, each event handled once")
     @PostMapping("/payments/webhooks/{gateway}")
     public ResponseEntity<Void> webhook(@PathVariable("gateway") String gateway, @RequestBody byte[] body,
                                         @RequestHeader HttpHeaders headers) {
@@ -37,6 +41,7 @@ public class GatewayController {
     }
 
     // Where the customer's browser lands after paying (Razorpay's callback_url, Stripe's success_url)
+    @Operation(summary = "The customer's return from the gateway; the result is confirmed with the gateway")
     @GetMapping("/payments/callback/{gateway}")
     public PaymentResponseDto callback(@PathVariable("gateway") String gateway, @RequestParam Map<String, String> parameters) {
         return paymentService.handleCallback(gatewayName(gateway), parameters);

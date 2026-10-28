@@ -1,5 +1,7 @@
 # Vanmool
 
+[![CI](https://github.com/vishalpatel011/vanmool/actions/workflows/ci.yml/badge.svg)](https://github.com/vishalpatel011/vanmool/actions/workflows/ci.yml)
+
 Vanmool is a backend e-commerce platform that connects rural and tribal producers, artisans and makers of natural and traditional products with customers in cities. It is a set of Java / Spring Boot microservices in one repository, built as the Scaler backend capstone project and designed so it can grow into a real small business.
 
 **Contents:** [Overview](#overview) · [Features](#features) · [Architecture](#architecture) · [Tech stack](#tech-stack) · [Getting started](#getting-started) · [API](#api) · [Events](#events) · [Testing](#testing) · [Deployment on AWS](#deployment-on-aws) · [Results](#results) · [Project structure](#project-structure) · [Limitations and future scope](#limitations-and-future-scope)
@@ -80,7 +82,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 | Payments | Razorpay Java SDK, Stripe Java SDK (test mode) |
 | API documentation | springdoc-openapi (OpenAPI 3, Swagger UI) |
 | Testing | JUnit 5, Mockito, MockMvc, WebTestClient, MockRestServiceServer, JaCoCo |
-| Build and run | Maven (wrapper), Docker, Docker Compose |
+| Build and run | Maven (wrapper), Docker, Docker Compose, GitHub Actions (CI) |
 | Cloud | AWS: EC2, EBS, VPC, security groups, RDS, Elastic Beanstalk, CloudFormation |
 
 ## Getting started
@@ -203,7 +205,9 @@ Each event is a JSON object starting with `eventId`, `eventType` and `occurredAt
 | Web layer | `*WebMvcTest` | HTTP mapping, validation, JSON (asserted field by field), status codes, security rules, the error format (MockMvc) |
 | Integration | `*IT` | Each service against real MySQL, Redis and Kafka: migrations, queries, caches, events end to end, signed tokens, gateway routing and failures |
 
-**523 unit and web layer tests and 112 integration tests** across the eight modules pass. Important behaviours were also checked by breaking the code on purpose and confirming a test fails. `./mvnw test` writes a JaCoCo coverage report for each of the six business services under `target/site/jacoco`.
+**Continuous integration:** GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw verify` on every push and pull request, with MySQL 8.4, Redis, Kafka and Mailpit as service containers, and builds the eight Docker images.
+
+**523 unit and web layer tests and 128 integration tests** across the eight modules pass. Important behaviours were also checked by breaking the code on purpose and confirming a test fails. `./mvnw test` writes a JaCoCo coverage report for each of the six business services under `target/site/jacoco`.
 
 ## Deployment on AWS
 
@@ -248,6 +252,7 @@ vanmool/
 ├── pom.xml                  Maven aggregator: one command builds every service
 ├── docker-compose.yml       infrastructure, and with --profile app the whole stack
 ├── .env.example             every setting, with placeholders
+├── .github/workflows/ci.yml continuous integration
 ├── infrastructure/
 │   ├── mysql/init/          creates the databases and their users
 │   └── aws/                 CloudFormation templates

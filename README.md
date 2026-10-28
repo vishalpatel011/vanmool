@@ -295,6 +295,24 @@ This builds the eight images and starts them with MySQL, Redis, Kafka and Mailpi
 - **Signing key:** with `JWT_PRIVATE_KEY` set, sessions survive a restart of the user-auth service; without it, a new key is made at every start. Generate one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` and put the lines between the `BEGIN` and `END` markers on one line.
 - **Payments:** `PAYMENT_FAKE_GATEWAY_ENABLED=true` turns on the fake gateway to try payments without a Razorpay or Stripe account; its webhook comes in through the gateway, like a real one's.
 
+**With an external database, or on a server.** The same file runs the stack against a MySQL server outside it (for example Amazon RDS), set in `.env`:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `DB_HOST` | Address of the MySQL server the four database services use | `mysql`, the container |
+| `MYSQL_CONTAINER_PROFILE` | `none` leaves the MySQL container out; the services then do not wait for it | `app` (part of the stack) |
+| `GATEWAY_PUBLISH` | Where the gateway listens: `80` on a server, where the firewall decides who may connect | `127.0.0.1:8000` |
+| `PUBLIC_URL` | The address clients use, for example `http://<server address>` | `http://127.0.0.1:8000` |
+
+The external server needs the four databases and users first. The same script that sets up the container does it, run once from a MySQL client container with the server's administrator login (running it again changes nothing):
+
+```
+docker run --rm --env-file .env -e MYSQL_HOST=<server> -e MYSQL_ADMIN_USER=<admin> -e MYSQL_ADMIN_PASSWORD=<password> \
+  -v ./infrastructure/mysql/init:/init:ro mysql:8.4 bash /init/create-databases.sh
+```
+
+Checked locally with a separate MySQL 8.4 container standing in for the external server: the script created the databases and users (and changed nothing on a second run), the MySQL container of the stack stayed stopped, Flyway created the tables on the external server, and signup, login, cart and orders worked through the gateway.
+
 Useful commands:
 
 ```

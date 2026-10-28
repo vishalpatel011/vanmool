@@ -3,6 +3,8 @@
 # The profile "app" adds MySQL and the eight services, the whole stack in containers:
 #   docker compose --profile app up -d --build
 # Passwords and keys come from .env (see .env.example).
+# With an external database server instead of the MySQL container (RDS on AWS), .env sets DB_HOST to its address and
+# MYSQL_CONTAINER_PROFILE=none; on a server, GATEWAY_PUBLISH=80 and PUBLIC_URL to the server's address.
 
 # Settings shared by the services
 x-service: &service
@@ -43,7 +45,8 @@ services:
   # infrastructure/mysql/init on the first start. MySQL 8.4 is the long-term support release (8.0 ended in April 2026)
   mysql:
     image: mysql:8.4
-    profiles: ["app"]
+    # Part of the stack, unless .env sets MYSQL_CONTAINER_PROFILE=none because the services use an external server
+    profiles: ["${MYSQL_CONTAINER_PROFILE:-app}"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
       PRODUCT_DB_PASSWORD: ${PRODUCT_DB_PASSWORD:-}
@@ -148,13 +151,14 @@ services:
     image: vanmool/user-auth-service
     environment:
       <<: *service-env
-      DB_URL: jdbc:mysql://mysql:3306/user_db
+      DB_URL: jdbc:mysql://${DB_HOST:-mysql}:3306/user_db
       DB_USERNAME: UserAuthService_user
       DB_PASSWORD: ${USER_DB_PASSWORD:-}
       # The key that signs tokens. Without it a new one is made at every start, and a restart ends every session
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
     depends_on: &needs-mysql-kafka
-      mysql: { condition: service_healthy }
+      # Waited for only when it is part of the stack (required: false): not with an external database
+      mysql: { condition: service_healthy, required: false }
       kafka: { condition: service_healthy }
       service-discovery: { condition: service_healthy }
     healthcheck:
@@ -169,11 +173,11 @@ services:
     mem_limit: 640m
     environment:
       <<: *service-env
-      DB_URL: jdbc:mysql://mysql:3306/product_db
+      DB_URL: jdbc:mysql://${DB_HOST:-mysql}:3306/product_db
       DB_USERNAME: ProductService_user
       DB_PASSWORD: ${PRODUCT_DB_PASSWORD:-}
     depends_on:
-      mysql: { condition: service_healthy }
+      mysql: { condition: service_healthy, required: false }
       kafka: { condition: service_healthy }
       redis: { condition: service_healthy }
       service-discovery: { condition: service_healthy }
@@ -200,7 +204,7 @@ services:
     image: vanmool/order-service
     environment:
       <<: *service-env
-      DB_URL: jdbc:mysql://mysql:3306/order_db
+      DB_URL: jdbc:mysql://${DB_HOST:-mysql}:3306/order_db
       DB_USERNAME: OrderService_user
       DB_PASSWORD: ${ORDER_DB_PASSWORD:-}
     depends_on: *needs-mysql-kafka
@@ -214,7 +218,7 @@ services:
     image: vanmool/payment-service
     environment:
       <<: *service-env
-      DB_URL: jdbc:mysql://mysql:3306/payment_db
+      DB_URL: jdbc:mysql://${DB_HOST:-mysql}:3306/payment_db
       DB_USERNAME: PaymentService_user
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:-}
       # The customer's browser is sent to the payment pages through the API gateway
@@ -255,8 +259,9 @@ services:
     environment:
       <<: *service-env
     ports:
-      # The one address clients use
-      - "127.0.0.1:8000:8000"
+      # The one address clients use: this machine only by default; on a server GATEWAY_PUBLISH=80, and the firewall
+      # (an AWS security group) decides who may connect
+      - "${GATEWAY_PUBLISH:-127.0.0.1:8000}:8000"
     depends_on:
       redis: { condition: service_healthy }
       kafka: { condition: service_healthy }

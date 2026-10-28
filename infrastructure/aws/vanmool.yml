@@ -1,0 +1,240 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Vanmool on AWS: a VPC with public and private subnets, RDS MySQL 8.4 in the private subnets (reachable only from
+  the server), and one EC2 server that runs the Docker Compose stack. Deleting the stack deletes all of it.
+
+Parameters:
+  AdminCidr:
+    Type: String
+    Description: The only address allowed to reach the server (the site and SSH), for example 203.0.113.7/32
+    AllowedPattern: '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$'
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Key pair for SSH to the server
+  DbMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: Password of the RDS administrator (vanmool_admin); used once, to create the services' databases
+  InstanceType:
+    Type: String
+    Default: m7i-flex.large
+    Description: 2 vCPU and 8 GB; the stack uses about 3.5 GB
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Ubuntu 24.04, the latest image published by Canonical
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/vishalpatel011/vanmool.git
+
+Resources:
+  # --- Network: two public subnets (the server) and two private ones (the database), in two zones
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: vanmool }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: vanmool }]
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: vanmool-public-a }]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: vanmool-public-b }]
+
+  # No route to the internet: what is placed here can only be reached from inside the VPC
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.11.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: vanmool-private-a }]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.12.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: vanmool-private-b }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: vanmool-public }]
+
+  PublicRouteToInternet:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: vanmool-private }]
+
+  PrivateSubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # --- Firewalls (security groups)
+
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Vanmool server - the site and SSH, from the admin address only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AdminCidr, Description: API gateway }
+        - { IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref AdminCidr, Description: SSH }
+      Tags: [{ Key: Name, Value: vanmool-server }]
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Vanmool database - MySQL from the server only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref ServerSecurityGroup
+          Description: MySQL from the Vanmool server
+      Tags: [{ Key: Name, Value: vanmool-database }]
+
+  # --- Database: RDS MySQL 8.4 in the private subnets
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Vanmool private subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    # A demo: deleting the stack deletes the data too, without a final snapshot
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: vanmool-mysql
+      Engine: mysql
+      EngineVersion: "8.4.11"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: vanmool_admin
+      MasterUserPassword: !Ref DbMasterPassword
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      Tags: [{ Key: Name, Value: vanmool }]
+
+  # --- Server: Docker Engine with Compose, and the repository, ready for docker compose --profile app up
+
+  Server:
+    Type: AWS::EC2::Instance
+    DependsOn: PublicRouteToInternet
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref PublicSubnetA
+          GroupSet: [!Ref ServerSecurityGroup]
+          AssociatePublicIpAddress: true
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      MetadataOptions:
+        HttpTokens: required
+      Tags: [{ Key: Name, Value: vanmool-server }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          # Docker Engine with the Compose and Buildx plugins, from Docker's own repository
+          curl -fsSL https://get.docker.com | sh
+          usermod -aG docker ubuntu
+          sudo -u ubuntu git clone --depth 1 ${RepositoryUrl} /home/ubuntu/vanmool
+          touch /home/ubuntu/setup-done
+
+  # A fixed public address, kept when the server is stopped and started again
+  ServerAddress:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Server
+      Tags: [{ Key: Name, Value: vanmool-server }]
+
+Outputs:
+  ServerAddress:
+    Description: Public address of the server (the site is http://<address>)
+    Value: !Ref ServerAddress
+  ServerPrivateAddress:
+    Description: Address of the server inside the VPC
+    Value: !GetAtt Server.PrivateIp
+  DatabaseEndpoint:
+    Description: RDS endpoint, reachable from the server only (DB_HOST)
+    Value: !GetAtt Database.Endpoint.Address
+  VpcId:
+    Value: !Ref Vpc
+  PublicSubnets:
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+  DatabaseSecurityGroup:
+    Value: !Ref DatabaseSecurityGroup

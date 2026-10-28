@@ -96,7 +96,7 @@ Target architecture (services are added one at a time; the table below shows wha
 | Razorpay Java SDK 1.4, Stripe Java SDK 34 | Payment links, webhook and callback signature checks | Implemented in test mode, verified with the SDKs' own signature checks (no live gateway accounts are used) |
 | Docker Compose | Local infrastructure (Redis, Kafka, Mailpit) | In use |
 | Docker | An image per service (two-stage build, layered jar, non-root user) | In use |
-| AWS (EC2, Elastic Beanstalk, VPC, RDS) | Deployment | Planned |
+| AWS: EC2, RDS, VPC and security groups, CloudFormation | Deployment of the whole stack | In use (Elastic Beanstalk: next) |
 
 ## Repository structure
 
@@ -334,6 +334,47 @@ Measured on a laptop (8 CPUs, Docker Desktop on Windows), 2026-10-27:
 | user-auth-service restarted | the customer's token still works afterwards; logins unavailable for 26 s (8 s to start, the rest until the gateway sees the new instance) |
 | Kafka stopped while an order is placed | the order is placed; its email goes out once Kafka is back (12.8 s after starting it) |
 | MySQL stopped | the database services answer 503 `SERVICE_UNAVAILABLE` after 2 s; once they are marked down (about 20 s), the gateway answers 503 at once; all work again 26 s after MySQL is back, without a restart. An `OrderCancelled` event that arrived during a 70 s outage was handled once MySQL was back (units released); before, it went to the dead-letter topic. Before a 2 s connection timeout was set: 500 after 30 s, 504 through the gateway |
+
+## Deployment on AWS
+
+`infrastructure/aws/vanmool.yml` is a CloudFormation template that creates the whole environment in one step, and deletes all of it with one command:
+
+```
+                 your IP only (security group)
+Internet ───────────────▶ EC2 server, public subnet (Docker Compose: API gateway on port 80, the eight services,
+                          │                          Kafka, Redis, Mailpit)
+                          │ MySQL, port 3306, from the server's security group only
+                          ▼
+                    RDS MySQL 8.4, private subnets (no route to the internet, not publicly accessible)
+```
+
+- **Network (VPC):** two public subnets for the server and two private subnets for the database, in two availability zones. The private subnets have no route to the internet.
+- **Security groups:** the server accepts the site (port 80) and SSH (port 22) from one address only (`AdminCidr`). The database accepts MySQL only from the server's security group, so it cannot be reached from outside the VPC even with the right password.
+- **RDS:** MySQL 8.4, `db.t4g.micro`, 20 GB, storage encrypted, one zone, daily backups kept for one day. Deleting the stack deletes the database too, without a final snapshot: this is a demonstration environment.
+- **EC2:** Ubuntu 24.04 on `m7i-flex.large` (2 vCPU, 8 GB), a 30 GB encrypted disk, IMDSv2 only, and an Elastic IP that stays the same when the server is stopped and started. At first boot it installs Docker Engine with the Compose and Buildx plugins and clones this repository.
+
+Steps (AWS CLI v2 signed in, for example with `aws login`):
+
+1. Create a key pair for SSH, kept outside the repository:
+   `aws ec2 create-key-pair --key-name vanmool-server --key-type ed25519 --query KeyMaterial --output text > vanmool-server.pem`
+2. Create the stack, with the parameters in a file outside the repository (`AdminCidr` = your IP/32, `KeyName`, `DbMasterPassword`):
+   `aws cloudformation create-stack --stack-name vanmool --template-body file://infrastructure/aws/vanmool.yml --parameters file://<outside the repo>/stack-parameters.json`
+3. When it is `CREATE_COMPLETE`, its outputs give `ServerAddress` and `DatabaseEndpoint`.
+4. On the server (`ssh -i vanmool-server.pem ubuntu@<ServerAddress>`), in `~/vanmool`, create `.env` with `MYSQL_CONTAINER_PROFILE=none`, `DB_HOST=<DatabaseEndpoint>`, `GATEWAY_PUBLISH=80`, `PUBLIC_URL=http://<ServerAddress>`, the four database passwords and `JWT_PRIVATE_KEY`.
+5. Create the databases and users on RDS with the administrator login, using the script described in Docker above (`MYSQL_HOST=<DatabaseEndpoint>`, `MYSQL_ADMIN_USER=vanmool_admin`).
+6. `docker compose --profile app up -d --build`
+7. The Eureka dashboard and Mailpit stay on the server's loopback; reach them through SSH: `ssh -L 8761:localhost:8761 -L 8025:localhost:8025 ubuntu@<ServerAddress>`, then http://localhost:8761 and http://localhost:8025.
+8. To remove everything: `aws cloudformation delete-stack --stack-name vanmool` and `aws ec2 delete-key-pair --key-name vanmool-server`.
+
+Measured on 2026-10-28 (region Asia Pacific, Sydney; the account's free plan allows one region; client in India):
+
+| Step | Result |
+|---|---|
+| Stack creation | 8.4 minutes, most of it RDS |
+| Images built on the server | 2 min 27 s for the eight |
+| `up` until every checked container is healthy | 150 s (2 vCPUs, all services starting at once) |
+| Memory | 3.2 GB of 7.8 GB used; services 170–340 MB each |
+| A request from India | about 850 ms with a new connection: about 400 ms network round trip, twice; 19–71 ms inside the server |
 
 ## Service discovery (Eureka)
 

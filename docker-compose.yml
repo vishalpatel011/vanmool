@@ -176,6 +176,11 @@ services:
       DB_URL: jdbc:mysql://${DB_HOST:-mysql}:3306/product_db
       DB_USERNAME: ProductService_user
       DB_PASSWORD: ${PRODUCT_DB_PASSWORD:-}
+      # The assistants' language model: Ollama on the machine running Docker, unless .env names another
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      # host.docker.internal also on Linux (Docker Desktop provides it by itself)
+      - "host.docker.internal:host-gateway"
     depends_on:
       mysql: { condition: service_healthy, required: false }
       kafka: { condition: service_healthy }

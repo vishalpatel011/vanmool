@@ -1,5 +1,6 @@
 package com.vanmool.productservice.exceptions;
 
+import com.vanmool.productservice.assistant.AssistantUnavailableException;
 import com.vanmool.productservice.dtos.ErrorDto;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.fge.jsonpatch.JsonPatchException;
@@ -84,6 +85,12 @@ public class GlobalExceptionHandler {
         // A missing body, broken JSON, or a value of the wrong type such as "price": "abc"
         return buildError(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST",
                 "Request body is missing or is not valid JSON for this request", request);
+    }
+
+    // The language model behind an assistant gave no usable answer: temporary, so 503
+    @ExceptionHandler(AssistantUnavailableException.class)
+    public ResponseEntity<ErrorDto> handleAssistantUnavailable(AssistantUnavailableException e, HttpServletRequest request) {
+        return buildError(HttpStatus.SERVICE_UNAVAILABLE, "ASSISTANT_UNAVAILABLE", e.getMessage(), request);
     }
 
     // The database is unreachable, or gave no connection within spring.datasource.hikari.connection-timeout. That is

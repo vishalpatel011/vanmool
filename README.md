@@ -25,6 +25,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 - **Cart and checkout:** carts in Redis, priced with current prices; checkout reserves all items' stock at once, without overselling; repeated checkouts are safe (`Idempotency-Key`); unpaid orders are cancelled after 60 minutes and their stock released.
 - **Orders:** history, cancellation, and tracking (the operations team ships and delivers orders, and each order keeps its status history).
 - **Payments:** Razorpay and Stripe in test mode, behind one interface; signed webhooks, callbacks and scheduled reconciliation with the gateway; one open payment per order; a fake gateway for development.
+- **Listing assistant (Spring AI):** a producer's notes in plain words become a draft listing (name, description, story, materials, origin, category) written by a language model running locally in Ollama; only facts from the notes, and nothing is saved until the producer lists the product.
 - **Notifications:** emails for sign-up, password changes and resets, orders, payments, shipping and delivery, each sent once.
 - **Platform:** API gateway, service discovery, domain events on Kafka through a transactional outbox, Docker images and Docker Compose, and an AWS deployment described as code (CloudFormation).
 
@@ -80,6 +81,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 | Security | Spring Security, Spring Authorization Server (OAuth2 / OpenID Connect), BCrypt, JJWT and Nimbus JOSE (RS256) |
 | Messaging and email | Apache Kafka 3.9 (KRaft, Spring for Apache Kafka), Spring Mail; Mailpit in development |
 | Payments | Razorpay Java SDK, Stripe Java SDK (test mode) |
+| AI | Spring AI 1.1 (`ChatClient`, structured output) with Ollama; Qwen 2.5 (7B) by default |
 | API documentation | springdoc-openapi (OpenAPI 3, Swagger UI) |
 | Testing | JUnit 5, Mockito, MockMvc, WebTestClient, MockRestServiceServer, JaCoCo |
 | Build and run | Maven (wrapper), Docker, Docker Compose, GitHub Actions (CI) |
@@ -87,7 +89,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 
 ## Getting started
 
-**Prerequisites:** JDK 17 or newer, Docker with Docker Compose 2.20 or newer, and Git. Maven is not needed (the repository has the Maven wrapper). A local MySQL 8 is needed only to run the services from an IDE.
+**Prerequisites:** JDK 17 or newer, Docker with Docker Compose 2.20 or newer, and Git. Maven is not needed (the repository has the Maven wrapper). A local MySQL 8 is needed only to run the services from an IDE. The listing assistant needs [Ollama](https://ollama.com) with `ollama pull qwen2.5`; everything else runs without it.
 
 ### Run everything with Docker
 
@@ -146,6 +148,7 @@ Every setting comes from environment variables with local defaults; `.env.exampl
 | `JWT_PRIVATE_KEY` | user-auth | none: a key is generated at start (development only) |
 | `RAZORPAY_*`, `STRIPE_*` | payment | empty: that gateway is off |
 | `MAIL_HOST`, `MAIL_PORT`, `MAIL_FROM` | notification | Mailpit on `localhost:1025` |
+| `OLLAMA_BASE_URL`, `ASSISTANT_CHAT_MODEL` | product (listing assistant) | `http://localhost:11434` (in Docker: the host's Ollama), `qwen2.5` |
 | `DB_HOST`, `MYSQL_CONTAINER_PROFILE`, `GATEWAY_PUBLISH`, `PUBLIC_URL` | Docker Compose | the MySQL container, `127.0.0.1:8000`, `http://127.0.0.1:8000` |
 
 ## API
@@ -171,6 +174,7 @@ Clients call the gateway; the services' own ports are internal. **Interactive do
 | `GET /products/{id}` · `GET /categories` · `GET /products/{id}/stock` | public | Product details · categories with counts · units for sale |
 | `POST /products` · `PUT`, `PATCH` (JSON Patch), `DELETE /products/{id}` | SELLER, ADMIN | List, replace, patch, remove (soft delete) a product |
 | `POST /products/{id}/stock-adjustments` | SELLER, ADMIN | Add or remove units: `{ "change": 10 }` |
+| `POST /products/listing-drafts` | SELLER, ADMIN | A draft listing from the producer's notes: `{ "notes": "bamboo basket, woven by hand by our women's group in Ahwa" }` |
 | `GET /cart` · `POST /cart/items` · `PUT`, `DELETE /cart/items/{productId}` · `DELETE /cart` | token | The cart, priced live · add · set or remove · empty |
 | `POST /orders` | token | Checkout: the cart becomes an order with a shipping address; optional `Idempotency-Key` |
 | `GET /orders` · `GET /orders/{id}` · `POST /orders/{id}/cancel` | token | History · one order with shipment and status history · cancel an unpaid order |
@@ -277,11 +281,12 @@ vanmool/
 - Payments were run end to end with the fake gateway; Razorpay and Stripe are integrated and tested in test mode without live accounts. Refunds are logged for manual handling.
 - Any seller can change any product: products are not yet linked to the seller who listed them.
 - One instance of each service; the AWS environment is a demonstration (HTTP by address, one admitted client).
+- The listing assistant runs a small model (7B) on the machine's CPU: 25–50 s per draft, reliable for English notes; it can still add small embellishments to a story, which the producer edits. Places are checked against the notes in code.
 - Google sign-in, refresh tokens and metrics dashboards are not built.
 
 **Future scope**
 - Producer onboarding and tools for producers to manage their listings
-- An assistant that drafts product descriptions and stories from a producer's notes in Gujarati or Hindi
+- The listing assistant for notes in Gujarati and Hindi, with a stronger multilingual model (the 7B model mistranslated them in tests)
 - Richer search and recommendations
 - Logistics integration with carriers' APIs
 - Web and mobile clients

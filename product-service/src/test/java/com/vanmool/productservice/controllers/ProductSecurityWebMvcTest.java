@@ -1,6 +1,8 @@
 package com.vanmool.productservice.controllers;
 
+import com.vanmool.productservice.assistant.ListingAssistant;
 import com.vanmool.productservice.configs.SecurityConfig;
+import com.vanmool.productservice.dtos.ListingDraftDto;
 import com.vanmool.productservice.dtos.ProductResponseDto;
 import com.vanmool.productservice.dtos.StockReservationResponseDto;
 import com.vanmool.productservice.models.Product;
@@ -47,7 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 // Who may call what, with the real security rules. jwt() stands in for a checked token with chosen roles; the
 // services are mocks, so a request that passes the rules gets an ordinary answer.
-@WebMvcTest({ProductController.class, StockController.class, CategoryController.class})
+@WebMvcTest({ProductController.class, StockController.class, CategoryController.class, ListingAssistantController.class})
 @Import({SecurityConfig.class, RestSecurityErrorHandler.class})
 class ProductSecurityWebMvcTest {
     private static final UUID PRODUCT_ID = UUID.fromString("150dac81-6130-4903-9385-9b682db879b3");
@@ -68,6 +70,9 @@ class ProductSecurityWebMvcTest {
 
     @MockitoBean
     private CategoryService categoryService;
+
+    @MockitoBean
+    private ListingAssistant listingAssistant;
 
     // The real one is built from user-auth-service's keys (JwtDecoderConfig); jwt() below skips decoding
     @MockitoBean
@@ -125,6 +130,20 @@ class ProductSecurityWebMvcTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{ \"change\": 5 }"))
                 .andExpect(status().isForbidden());
         verifyNoInteractions(productService, stockService);
+    }
+
+    @Test
+    void theListingAssistant_isForSellersAndAdmins_only() throws Exception {
+        when(listingAssistant.draft(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(new ListingDraftDto("Ragi Biscuits", "Biscuits.", null, "Ragi", null, "Natural Foods"));
+        String notes = "{ \"notes\": \"ragi biscuits\" }";
+
+        mockMvc.perform(post("/products/listing-drafts").contentType(MediaType.APPLICATION_JSON).content(notes))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/products/listing-drafts").with(tokenWith("CUSTOMER")).contentType(MediaType.APPLICATION_JSON).content(notes))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/products/listing-drafts").with(tokenWith("SELLER")).contentType(MediaType.APPLICATION_JSON).content(notes))
+                .andExpect(status().isOk());
     }
 
     @ParameterizedTest

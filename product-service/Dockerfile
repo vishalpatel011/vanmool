@@ -7,8 +7,9 @@ FROM maven:3.9.9-eclipse-temurin-17 AS build
 WORKDIR /build
 COPY pom.xml .
 COPY src/main src/main
-# The cache mount keeps downloaded dependencies between builds without putting them into the image
-RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -Dmaven.test.skip=true
+# The cache mount keeps downloaded dependencies between builds without putting them into the image. Locked: the
+# eight images build at the same time, and two Maven runs writing the same files of one cache can fail
+RUN --mount=type=cache,target=/root/.m2,sharing=locked mvn -B -q package -Dmaven.test.skip=true
 # Split the jar into layers: libraries change rarely, the code often, so a rebuild reuses the library layer
 RUN cp target/*.jar application.jar \
     && java -Djarmode=tools -jar application.jar extract --layers --destination extracted

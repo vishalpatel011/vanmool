@@ -366,6 +366,14 @@ Steps (AWS CLI v2 signed in, for example with `aws login`):
 7. The Eureka dashboard and Mailpit stay on the server's loopback; reach them through SSH: `ssh -L 8761:localhost:8761 -L 8025:localhost:8025 ubuntu@<ServerAddress>`, then http://localhost:8761 and http://localhost:8025.
 8. To remove everything: `aws cloudformation delete-stack --stack-name vanmool` and `aws ec2 delete-key-pair --key-name vanmool-server`.
 
+**Elastic Beanstalk.** `infrastructure/aws/vanmool-beanstalk.yml` deploys product-service a second way, as a jar on Beanstalk's Java 17 (Corretto) platform, in the same VPC and against the same RDS database. The stack creates the two roles Beanstalk needs (a service role for Beanstalk, an instance profile for its server), a security group that admits one address, a rule that lets that server reach RDS, the application with the jar as its version, and one environment:
+
+- **One instance, no load balancer** (`SingleInstance`, `t3.small`); nginx forwards port 80 to the service on 5000. Beanstalk's own security group, which would open port 80 to everyone, is switched off.
+- **Settings as environment variables** (database URL, user and password, port, memory), as in the lecture. On Beanstalk, product-service runs on its own: no registry, no Kafka listener, Redis left out of its health. It serves the catalog from RDS; writes still need a seller's token.
+- **Health:** Beanstalk asks `/actuator/health` itself (enhanced health), not only whether the process runs.
+
+Steps: build the jar (`./mvnw -pl product-service package -DskipTests`), upload it to the Beanstalk bucket (`aws elasticbeanstalk create-storage-location`, then `aws s3 cp`), and create the stack with `--capabilities CAPABILITY_IAM` and the outputs of the `vanmool` stack as parameters. `aws cloudformation delete-stack --stack-name vanmool-beanstalk` removes it.
+
 Measured on 2026-10-28 (region Asia Pacific, Sydney; the account's free plan allows one region; client in India):
 
 | Step | Result |
@@ -375,6 +383,9 @@ Measured on 2026-10-28 (region Asia Pacific, Sydney; the account's free plan all
 | `up` until every checked container is healthy | 150 s (2 vCPUs, all services starting at once) |
 | Memory | 3.2 GB of 7.8 GB used; services 170–340 MB each |
 | A request from India | about 850 ms with a new connection: about 400 ms network round trip, twice; 19–71 ms inside the server |
+| A purchase through the gateway: seller lists products, customer orders and pays on the fake checkout | basket stock 10 → 8; order `CONFIRMED` 0.8 s after paying; order, payment and welcome emails in the server's Mailpit |
+| The database from outside | its name resolves to a private address (10.20.12.x); connecting from the internet times out, from the server port 3306 is open; RDS reports "publicly accessible: false" |
+| Elastic Beanstalk stack | 7.8 minutes; the environment itself launched in 2 minutes and turned Green (health `/actuator/health` UP); the catalog came from RDS; a write without a token got 401 |
 
 ## Service discovery (Eureka)
 

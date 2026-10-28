@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Vanmool on Elastic Beanstalk: product-service deployed as a jar on the Java 17 platform, in the VPC of the vanmool
+  stack, reading the same RDS database. It runs on its own (no Eureka, Kafka or Redis, which stay private on the
+  server), serving the catalog. Deleting the stack deletes the environment, its roles and its database access.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: The RDS security group of the vanmool stack; this stack lets the Beanstalk instance in
+  AdminCidr:
+    Type: String
+    Description: The only address allowed to reach the environment
+    AllowedPattern: '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$'
+  DatabaseHost:
+    Type: String
+    Description: The RDS endpoint (DatabaseEndpoint output of the vanmool stack)
+  ProductDbPassword:
+    Type: String
+    NoEcho: true
+    Description: Password of ProductService_user
+  SourceBucket:
+    Type: String
+  SourceKey:
+    Type: String
+    Description: The product-service jar in the bucket
+  PlatformArn:
+    Type: String
+    Default: arn:aws:elasticbeanstalk:ap-southeast-2::platform/Corretto 17 running on 64bit Amazon Linux 2023/4.14.0
+
+Resources:
+  # --- Roles: Beanstalk manages the environment with the first; its instance runs with the second
+
+  ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: elasticbeanstalk.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkEnhancedHealth
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkManagedUpdatesCustomerRolePolicy
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # --- Network access: the site from the admin address only; MySQL from this instance to RDS
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Vanmool Beanstalk instance - HTTP from the admin address only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AdminCidr, Description: product-service through nginx }
+      Tags: [{ Key: Name, Value: vanmool-beanstalk }]
+
+  DatabaseAccessFromBeanstalk:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref InstanceSecurityGroup
+      Description: MySQL from the Beanstalk instance
+
+  # --- The application, the jar as its version, and one environment
+
+  Application:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: vanmool
+      Description: Vanmool services deployed on Elastic Beanstalk
+
+  ProductServiceVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref Application
+      Description: !Ref SourceKey
+      SourceBundle:
+        S3Bucket: !Ref SourceBucket
+        S3Key: !Ref SourceKey
+
+  ProductEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    DependsOn: DatabaseAccessFromBeanstalk
+    Properties:
+      ApplicationName: !Ref Application
+      EnvironmentName: vanmool-product
+      PlatformArn: !Ref PlatformArn
+      VersionLabel: !Ref ProductServiceVersion
+      OptionSettings:
+        # One instance, no load balancer
+        - { Namespace: "aws:elasticbeanstalk:environment", OptionName: EnvironmentType, Value: SingleInstance }
+        - { Namespace: "aws:elasticbeanstalk:environment", OptionName: ServiceRole, Value: !Ref ServiceRole }
+        - { Namespace: "aws:autoscaling:launchconfiguration", OptionName: IamInstanceProfile, Value: !Ref InstanceProfile }
+        - { Namespace: "aws:autoscaling:launchconfiguration", OptionName: InstanceType, Value: t3.small }
+        # Only our security group: Beanstalk's own would open port 80 to everyone
+        - { Namespace: "aws:autoscaling:launchconfiguration", OptionName: SecurityGroups, Value: !Ref InstanceSecurityGroup }
+        - { Namespace: "aws:autoscaling:launchconfiguration", OptionName: DisableDefaultEC2SecurityGroup, Value: "true" }
+        - { Namespace: "aws:ec2:vpc", OptionName: VPCId, Value: !Ref VpcId }
+        - { Namespace: "aws:ec2:vpc", OptionName: Subnets, Value: !Join [",", !Ref PublicSubnets] }
+        - { Namespace: "aws:ec2:vpc", OptionName: AssociatePublicIpAddress, Value: "true" }
+        # Health: Beanstalk asks the service itself, not just whether the process runs
+        - { Namespace: "aws:elasticbeanstalk:application", OptionName: Application Healthcheck URL, Value: /actuator/health }
+        - { Namespace: "aws:elasticbeanstalk:healthreporting:system", OptionName: SystemType, Value: enhanced }
+        # The service's settings, as environment variables (the lecture's way); nginx forwards port 80 to 5000
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: SERVER_PORT, Value: "5000" }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: DB_URL, Value: !Sub "jdbc:mysql://${DatabaseHost}:3306/product_db" }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: DB_USERNAME, Value: ProductService_user }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: DB_PASSWORD, Value: !Ref ProductDbPassword }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: JAVA_TOOL_OPTIONS, Value: "-XX:MaxRAMPercentage=50" }
+        # On its own: no registry, no Kafka listener or topic creation, and Redis left out of its health
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: EUREKA_CLIENT_ENABLED, Value: "false" }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: SPRING_KAFKA_LISTENER_AUTO_STARTUP, Value: "false" }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: SPRING_KAFKA_ADMIN_AUTO_CREATE, Value: "false" }
+        - { Namespace: "aws:elasticbeanstalk:application:environment", OptionName: MANAGEMENT_HEALTH_REDIS_ENABLED, Value: "false" }
+
+Outputs:
+  EnvironmentUrl:
+    Description: The product-service on Beanstalk (http://<address>/products)
+    Value: !GetAtt ProductEnvironment.EndpointURL

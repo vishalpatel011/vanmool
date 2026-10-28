@@ -25,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -64,6 +65,9 @@ class ProductDbServiceTest {
     @Mock
     private CategoryService categoryService;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -71,7 +75,7 @@ class ProductDbServiceTest {
 
     @BeforeEach
     void setUp() {
-        productDbService = new ProductDbService(categoryService, productRepository, validator);
+        productDbService = new ProductDbService(categoryService, productRepository, validator, eventPublisher);
     }
 
     private static Category category(String name) {
@@ -521,6 +525,8 @@ class ProductDbServiceTest {
         verify(productRepository).save(basket);
         verify(productRepository, never()).delete(any());
         verify(productRepository, never()).deleteById(any());
+        // The shopping assistant's index drops it (after the commit)
+        verify(eventPublisher).publishEvent(new ProductChangedEvent(PRODUCT_ID));
     }
 
     @Test
@@ -531,5 +537,6 @@ class ProductDbServiceTest {
         // Act & Assert
         assertThrows(ProductNotFoundException.class, () -> productDbService.deleteProduct(PRODUCT_ID));
         verify(productRepository, never()).save(any());
+        verifyNoInteractions(eventPublisher);
     }
 }

@@ -26,6 +26,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 - **Orders:** history, cancellation, and tracking (the operations team ships and delivers orders, and each order keeps its status history).
 - **Payments:** Razorpay and Stripe in test mode, behind one interface; signed webhooks, callbacks and scheduled reconciliation with the gateway; one open payment per order; a fake gateway for development.
 - **Listing assistant (Spring AI):** a producer's notes in plain words become a draft listing (name, description, story, materials, origin, category) written by a language model running locally in Ollama; only facts from the notes, and nothing is saved until the producer lists the product.
+- **Shopping assistant (RAG):** customers ask in their own words ("a gift for a child under 200 rupees"); the products closest to the question are found by meaning and by name, and the language model answers using only those products, which come back with the answer. With no product close enough, it says so without calling the model.
 - **Notifications:** emails for sign-up, password changes and resets, orders, payments, shipping and delivery, each sent once.
 - **Platform:** API gateway, service discovery, domain events on Kafka through a transactional outbox, Docker images and Docker Compose, and an AWS deployment described as code (CloudFormation).
 
@@ -69,6 +70,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 - **Stock cannot be oversold.** Each count changes in one conditional `UPDATE ... WHERE quantity >= n` inside one transaction for the whole order; reservations are keyed by order id, so retries are safe.
 - **The payment gateway is the source of truth.** Webhooks are signature-checked and processed once, callbacks are verified with the gateway, and reconciliation catches lost webhooks.
 - **Failures are fast and temporary failures say so.** No connection to a database within 2 s gives `503`; events wait while a database is down instead of being parked; caches and rate limits keep working without Redis (fail open).
+- **The assistants cannot invent the catalog.** The shopping assistant answers from the retrieved products only (retrieval-augmented generation); retrieval is hybrid, similarity of meaning plus a boost for words of the question found in a product, because embedding models know rare names such as "Dangs" poorly (measured). The listing assistant only drafts; the producer decides.
 - **Schemas are versioned.** Flyway applies each service's migrations at start, and Hibernate only validates the result.
 
 ## Tech stack
@@ -81,7 +83,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 | Security | Spring Security, Spring Authorization Server (OAuth2 / OpenID Connect), BCrypt, JJWT and Nimbus JOSE (RS256) |
 | Messaging and email | Apache Kafka 3.9 (KRaft, Spring for Apache Kafka), Spring Mail; Mailpit in development |
 | Payments | Razorpay Java SDK, Stripe Java SDK (test mode) |
-| AI | Spring AI 1.1 (`ChatClient`, structured output) with Ollama; Qwen 2.5 (7B) by default |
+| AI | Spring AI 1.1 (`ChatClient`, structured output, `SimpleVectorStore`) with Ollama: Qwen 2.5 (7B) for answers, nomic-embed-text for embeddings |
 | API documentation | springdoc-openapi (OpenAPI 3, Swagger UI) |
 | Testing | JUnit 5, Mockito, MockMvc, WebTestClient, MockRestServiceServer, JaCoCo |
 | Build and run | Maven (wrapper), Docker, Docker Compose, GitHub Actions (CI) |
@@ -89,7 +91,7 @@ Vanmool gives these producers a storefront with that story built in, and runs th
 
 ## Getting started
 
-**Prerequisites:** JDK 17 or newer, Docker with Docker Compose 2.20 or newer, and Git. Maven is not needed (the repository has the Maven wrapper). A local MySQL 8 is needed only to run the services from an IDE. The listing assistant needs [Ollama](https://ollama.com) with `ollama pull qwen2.5`; everything else runs without it.
+**Prerequisites:** JDK 17 or newer, Docker with Docker Compose 2.20 or newer, and Git. Maven is not needed (the repository has the Maven wrapper). A local MySQL 8 is needed only to run the services from an IDE. The two assistants need [Ollama](https://ollama.com) with `ollama pull qwen2.5` and `ollama pull nomic-embed-text`; everything else runs without it.
 
 ### Run everything with Docker
 
@@ -148,7 +150,7 @@ Every setting comes from environment variables with local defaults; `.env.exampl
 | `JWT_PRIVATE_KEY` | user-auth | none: a key is generated at start (development only) |
 | `RAZORPAY_*`, `STRIPE_*` | payment | empty: that gateway is off |
 | `MAIL_HOST`, `MAIL_PORT`, `MAIL_FROM` | notification | Mailpit on `localhost:1025` |
-| `OLLAMA_BASE_URL`, `ASSISTANT_CHAT_MODEL` | product (listing assistant) | `http://localhost:11434` (in Docker: the host's Ollama), `qwen2.5` |
+| `OLLAMA_BASE_URL`, `ASSISTANT_CHAT_MODEL`, `ASSISTANT_EMBEDDING_MODEL` | product (assistants) | `http://localhost:11434` (in Docker: the host's Ollama), `qwen2.5`, `nomic-embed-text` |
 | `DB_HOST`, `MYSQL_CONTAINER_PROFILE`, `GATEWAY_PUBLISH`, `PUBLIC_URL` | Docker Compose | the MySQL container, `127.0.0.1:8000`, `http://127.0.0.1:8000` |
 
 ## API
@@ -174,6 +176,7 @@ Clients call the gateway; the services' own ports are internal. **Interactive do
 | `GET /products/{id}` · `GET /categories` · `GET /products/{id}/stock` | public | Product details · categories with counts · units for sale |
 | `POST /products` · `PUT`, `PATCH` (JSON Patch), `DELETE /products/{id}` | SELLER, ADMIN | List, replace, patch, remove (soft delete) a product |
 | `POST /products/{id}/stock-adjustments` | SELLER, ADMIN | Add or remove units: `{ "change": 10 }` |
+| `POST /assistant/questions` | public | Ask about the catalog: `{ "question": "Which products are from Dangs?" }`; the answer, and the products it is based on |
 | `POST /products/listing-drafts` | SELLER, ADMIN | A draft listing from the producer's notes: `{ "notes": "bamboo basket, woven by hand by our women's group in Ahwa" }` |
 | `GET /cart` · `POST /cart/items` · `PUT`, `DELETE /cart/items/{productId}` · `DELETE /cart` | token | The cart, priced live · add · set or remove · empty |
 | `POST /orders` | token | Checkout: the cart becomes an order with a shipping address; optional `Idempotency-Key` |
@@ -211,7 +214,7 @@ Each event is a JSON object starting with `eventId`, `eventType` and `occurredAt
 
 **Continuous integration:** GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw verify` on every push and pull request, with MySQL 8.4, Redis, Kafka and Mailpit as service containers, and builds the eight Docker images.
 
-**523 unit and web layer tests and 128 integration tests** across the eight modules pass. Important behaviours were also checked by breaking the code on purpose and confirming a test fails. `./mvnw test` writes a JaCoCo coverage report for each of the six business services under `target/site/jacoco`.
+**544 unit and web layer tests and 128 integration tests** across the eight modules pass. Important behaviours were also checked by breaking the code on purpose and confirming a test fails. `./mvnw test` writes a JaCoCo coverage report for each of the six business services under `target/site/jacoco`.
 
 ## Deployment on AWS
 
@@ -282,6 +285,7 @@ vanmool/
 - Any seller can change any product: products are not yet linked to the seller who listed them.
 - One instance of each service; the AWS environment is a demonstration (HTTP by address, one admitted client).
 - The listing assistant runs a small model (7B) on the machine's CPU: 25–50 s per draft, reliable for English notes; it can still add small embellishments to a story, which the producer edits. Places are checked against the notes in code.
+- The shopping assistant's catalog index is in memory (Spring AI's `SimpleVectorStore`), built at start and kept current after each committed product change: each instance has its own. Questions about price ranges are judged by the model from the candidates' prices; the catalog's price filter is the exact tool.
 - Google sign-in, refresh tokens and metrics dashboards are not built.
 
 **Future scope**

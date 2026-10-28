@@ -56,7 +56,7 @@ class ProductCacheTest {
         @Bean
         ProductDbService productDbService(CategoryService categoryService, ProductRepository productRepository) {
             return new ProductDbService(categoryService, productRepository,
-                    Validation.buildDefaultValidatorFactory().getValidator());
+                    Validation.buildDefaultValidatorFactory().getValidator(), event -> { });
         }
     }
 

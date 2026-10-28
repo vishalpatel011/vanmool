@@ -35,6 +35,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(requests -> requests
                         .requestMatchers("/error", "/actuator/health", "/actuator/info", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers(HttpMethod.GET, "/products", "/products/**", "/categories", "/categories/**").permitAll()
+                        // The shopping assistant answers anyone, as the catalog does
+                        .requestMatchers(HttpMethod.POST, "/assistant/questions").permitAll()
                         .requestMatchers("/stock-reservations", "/stock-reservations/**").authenticated()
                         .requestMatchers("/products", "/products/**").hasAnyRole("SELLER", "ADMIN")
                         .anyRequest().authenticated())

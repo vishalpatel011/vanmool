@@ -21,6 +21,10 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     @EntityGraph(attributePaths = "category")
     Optional<Product> findByIdAndDeletedFalse(UUID id);
 
+    // Every product for sale, with its category: what the shopping assistant's catalog index is built from
+    @EntityGraph(attributePaths = "category")
+    List<Product> findAllByDeletedFalse();
+
     boolean existsByIdAndDeletedFalse(UUID id);
 
     // The products of a stock reservation: only their names and prices are used, so the category is not fetched

@@ -124,6 +124,11 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-ollama</artifactId>
         </dependency>
+        <!-- The catalog index of the shopping assistant (SimpleVectorStore, in memory) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
         <!-- OpenAPI description at /v3/api-docs and Swagger UI at /swagger-ui.html -->
         <dependency>
             <groupId>org.springdoc</groupId>

@@ -24,6 +24,7 @@ import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validator;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -50,11 +51,15 @@ public class ProductDbService implements ProductService{
     private final CategoryService categoryService;
     private final ProductRepository productRepository;
     private final Validator validator;
+    // Tells the shopping assistant's catalog index about every change (it listens after the commit)
+    private final ApplicationEventPublisher eventPublisher;
 
-    public ProductDbService(CategoryService categoryService, ProductRepository productRepository, Validator validator) {
+    public ProductDbService(CategoryService categoryService, ProductRepository productRepository, Validator validator,
+                            ApplicationEventPublisher eventPublisher) {
         this.categoryService = categoryService;
         this.productRepository = productRepository;
         this.validator = validator;
+        this.eventPublisher = eventPublisher;
     }
 
     // On a cache hit this method does not run at all. A missing product throws, so "not found" is never cached
@@ -92,7 +97,9 @@ public class ProductDbService implements ProductService{
         Product product = new Product();
         buildProduct(product, productRequestDto);
 
-        return productRepository.save(product);
+        Product saved = productRepository.save(product);
+        eventPublisher.publishEvent(new ProductChangedEvent(saved.getId()));
+        return saved;
     }
 
     @Override
@@ -103,7 +110,9 @@ public class ProductDbService implements ProductService{
         Product product = findProduct(id);
         buildProduct(product, productRequestDto);
 
-        return productRepository.save(product);
+        Product saved = productRepository.save(product);
+        eventPublisher.publishEvent(new ProductChangedEvent(id));
+        return saved;
     }
 
     @Override
@@ -131,7 +140,9 @@ public class ProductDbService implements ProductService{
 
         buildProduct(existingProduct, patchedProduct);
 
-        return productRepository.save(existingProduct);
+        Product saved = productRepository.save(existingProduct);
+        eventPublisher.publishEvent(new ProductChangedEvent(id));
+        return saved;
     }
 
     @Override
@@ -142,6 +153,7 @@ public class ProductDbService implements ProductService{
         Product product = findProduct(id);
         product.setDeleted(true);
         productRepository.save(product);
+        eventPublisher.publishEvent(new ProductChangedEvent(id));
     }
 
     private Product findProduct(UUID id) throws ProductNotFoundException {
